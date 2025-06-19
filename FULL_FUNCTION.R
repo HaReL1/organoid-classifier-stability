@@ -1,3 +1,4 @@
+library(randomForest)
 library(Seurat)
 library(ggplot2)
 library(dplyr)
@@ -189,6 +190,8 @@ analyze_noise_impact_on_prediction <- function(
     
     # Consistent Order in Heatmaps - Get cell type order from training data
     cell_type_order <- unique(train_labeled_seurat[[ref_cell_type_column]])[[ref_cell_type_column]]
+    cell_type_order = factor(cell_type_order, levels = c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","ENDO","MACROPHAG"))
+    cell_type_order = sort(cell_type_order)
     if (is.null(myColors)) {
       myColors <- brewer.pal(length(cell_type_order), "Paired") # use length of cell_type_order
       names(myColors) <- cell_type_order # use names from cell_type_order
@@ -442,22 +445,32 @@ analyze_noise_impact_on_prediction <- function(
     }
   }
   
-  print("Run once without noise...")
-  temp_seurat_obj <- process_seurat_data_iter(
-    labeled_train_data = train_Six2GFP,
-    labeled_test_data = test_Six2GFP,
-    test_data = seurat_obj,
-    plot_on_this_UMAP = seurat_obj,
-    ref_cell_type_column = ref_cell_type_column,
-    dims = dims,
-    train_title = train_title,
-    test_title = test_title_prefix,
-    n_neighbors = n_neighbors,
-    skip_neighbors = skip_neighbors,
-    output_prefix = paste0(output_prefix_base, "0_silent_"), # without noise...
-    min_cell_count_for_type = min_cell_count_for_type,
-    use_cache = use_cache
-  )
+  second_process_file <- paste0(cache_dir, "run_without_noise.rds")
+  if (use_cache && file.exists(second_process_file)) {
+    print("Loading cached 'without noise' data...")
+    temp_seurat_obj <- readRDS(second_process_file)
+  } else {
+    print("Run once without noise...")
+    temp_seurat_obj <- process_seurat_data_iter(
+      labeled_train_data = train_Six2GFP,
+      labeled_test_data = test_Six2GFP,
+      test_data = seurat_obj,
+      plot_on_this_UMAP = seurat_obj,
+      ref_cell_type_column = ref_cell_type_column,
+      dims = dims,
+      train_title = train_title,
+      test_title = test_title_prefix,
+      n_neighbors = n_neighbors,
+      skip_neighbors = skip_neighbors,
+      output_prefix = paste0(output_prefix_base, "0_silent_"), # without noise...
+      min_cell_count_for_type = min_cell_count_for_type,
+      use_cache = use_cache
+    )
+    if (use_cache) {
+      print("Caching without noise run...")
+      saveRDS(temp_seurat_obj, second_process_file)
+    }
+  }
   # initial_test_query = temp_seurat_obj[["test"]] # save initial test_query object
   main_cell_type_order <- temp_seurat_obj[["cell_type_order"]] # Capture cell_type_order
   
@@ -815,6 +828,9 @@ analyze_noise_impact_on_prediction <- function(
     stability_pred[i,1] = RSS_mat_filtered[type, type] # from stage #9
     stability_pred[i,2] = conf_matrix_percent[type, type] # from stage #5.5
   }
+  
+  spearman_corr = cor(x=stability_pred[,1], y = stability_pred[,2], method = c("spearman"))
+  
   stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() + theme_bw() +
     ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5) # 2. Add Title
   
@@ -841,8 +857,9 @@ analyze_noise_impact_on_prediction <- function(
   
   ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot.svg"), plot = plot_all_stab,
          width = 12, height = 9, units = "in")
-  
-  # return? temp_seurat_obj, seurat_obj
+  #####
+  # temp_seurat_obj saved as run_without_noise.rds
+  # seurat_obj saved as train_seurat_processed.rds
   return(list(
     noised_prediction_matrix = noised_prediction,
     change_counts = change_counts_df,

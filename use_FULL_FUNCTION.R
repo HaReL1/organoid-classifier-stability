@@ -5,7 +5,7 @@
 } # load six2gfp (test_Six2GFP, train_Six2GFP)
 {
   Uchimura_Humphreys_20 = read.table("GSM3763147_Uchimura.dge.txt")
-  load(file = "uchimura_off_target_cell_list")
+  load(file = "uchimura_off_target_cell_list") # from pseudo_labels_cleaner_uchimura.R
   seurat_Uchimura_Humphreys_20 <- CreateSeuratObject(counts = Uchimura_Humphreys_20[,!colnames(Uchimura_Humphreys_20) %in% uchimura_off_target_cell_list],
                                                      assay = "RNA")
   remove(Uchimura_Humphreys_20, uchimura_off_target_cell_list)
@@ -106,6 +106,7 @@ Uchimura_full_flow = analyze_noise_impact_on_prediction(
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
   return_all_suerats = FALSE
 )
+# temp_seurat_obj <- readRDS("six2gfp/newest_function/Uchimura_noised/_cache/run_without_noise.rds") # debug
 
 Takasato_full_flow = analyze_noise_impact_on_prediction(
   seurat_Takasato_Humphreys_20,
