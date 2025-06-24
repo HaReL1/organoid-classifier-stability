@@ -296,18 +296,18 @@ analyze_noise_impact_on_prediction <- function(
     train_plot <- DimPlot(train_labeled_seurat, reduction = "umap", group.by = ref_cell_type_column, label = TRUE, label.size = 3,
                           repel = TRUE) + ggtitle(paste0(train_title,"\n(train) annotations")) + # 2. Add Title
       scale_color_manual(values = myColors) +
-      theme(legend.position = "left", legend.text = element_text(size=8)) + xlim(xlim) + ylim(ylim) + theme_bw() # White background
+      theme(legend.position = "left", legend.text = element_text(size=8)) + xlim(xlim) + ylim(ylim)
     
     test_plot <- DimPlot(test_query, reduction = "ref.umap", group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                          label.size = 3, repel = TRUE) + ggtitle(paste(test_title, "\nTransferred Labels")) + # 2. Add Title
-      scale_color_manual(values = myColors) + NoLegend() + xlim(xlim) + ylim(ylim) + theme_bw() # White background
+      scale_color_manual(values = myColors) + NoLegend() + xlim(xlim) + ylim(ylim)
     
     test_query <- calculate_entropy(test_query)
     quantile_80 = quantile(test_query$entropy, probs = 0.8)
     
     test_entropy_plot <- FeaturePlot(test_query, reduction = "ref.umap", features = "entropy",
                                      cols = colors_for_feature, keep.scale = "all") +
-      ggtitle(paste(test_title, "\nEntropy")) + xlim(xlim) + ylim(ylim) + theme_bw() # White background # 2. Add Title
+      ggtitle(paste(test_title, "\nEntropy")) + xlim(xlim) + ylim(ylim)
     
     train_data <- train_labeled_seurat@reductions[["pca"]]@cell.embeddings[, dims]
     test_query_neighbors=''
@@ -326,11 +326,11 @@ analyze_noise_impact_on_prediction <- function(
       # plot labeled_test related plots
       labeled_test_plot <- DimPlot(labeled_test_query, reduction = "ref.umap", group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                                    label.size = 3, repel = TRUE) + ggtitle(paste0(train_title," Labeled Test\nTransferred Labels")) + # 2. Add Title
-        scale_color_manual(values = myColors) + NoLegend() + xlim(xlim) + ylim(ylim) + theme_bw() # White background
+        scale_color_manual(values = myColors) + NoLegend() + xlim(xlim) + ylim(ylim)
       
       labeled_test_entropy_plot <- FeaturePlot(labeled_test_query, reduction = "ref.umap", features = "entropy",
                                                cols = colors_for_feature, keep.scale = "all") +
-        ggtitle(paste0(train_title," Labeled Test\nEntropy")) + xlim(xlim) + ylim(ylim) + theme_bw() # White background # 2. Add Title
+        ggtitle(paste0(train_title," Labeled Test\nEntropy")) + xlim(xlim) + ylim(ylim)
       
       
       # Save combined train and labeled test plot
@@ -376,14 +376,14 @@ analyze_noise_impact_on_prediction <- function(
         
         p1 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
-                     label.size = 3, repel = FALSE) + ggtitle("original") + theme_bw() # White background # 2. Add Title
+                     label.size = 3, repel = FALSE) + ggtitle("original")
         
         # change the prediction according to this run
         plot_on_this_UMAP[[prediction_column_name]][current_cells]=test_query[[paste0("predicted.",ref_cell_type_column)]]
         
         p2 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
-                     label.size = 3, repel = FALSE) + ggtitle("new iteration") + theme_bw() # White background # 2. Add Title
+                     label.size = 3, repel = FALSE) + ggtitle("new iteration")
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
@@ -392,12 +392,12 @@ analyze_noise_impact_on_prediction <- function(
       }
       else {
         p1 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE,
-                     label.size = 3, repel = FALSE) + theme_bw() # White background # 2. Add Title
+                     label.size = 3, repel = FALSE)
         
         
         plot_on_this_UMAP=AddMetaData(plot_on_this_UMAP,test_query$predicted.type,col.name = "predicted.type")
         p2 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
-                     label.size = 3, repel = FALSE) + theme_bw() # White background # 2. Add Title
+                     label.size = 3, repel = FALSE)
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
@@ -531,7 +531,7 @@ analyze_noise_impact_on_prediction <- function(
                                      features = "Changes",
                                      cols = colors_feature_plot_noise,
                                      keep.scale = "all") +
-    ggtitle("Number of Prediction Changes with Noise") + theme_bw() # White background # 2. Add Title
+    ggtitle("Number of Prediction Changes with Noise")
   ggsave(paste0(output_prefix_base, "change_feature_plot.svg"), plot = change_feature_plot,
          width = 16, height = 9, units = "in")
   
@@ -583,29 +583,41 @@ analyze_noise_impact_on_prediction <- function(
     mutate(proportion = n/sum(n)) %>%
     ungroup()
   
-  change_proportion_plot <- ggplot(plot_data, aes(x = Initial_Prediction, y = proportion, fill = Noised_Prediction)) +
+  change_proportion_plot <- ggplot(plot_data, 
+                                   aes(x = factor(Initial_Prediction, levels = levels(main_cell_type_order)), 
+                                       y = proportion, 
+                                       fill = Noised_Prediction)) +
     geom_bar(stat = "identity", position = "stack", width = 0.7) +
-    ggrepel::geom_text_repel(aes(label = paste0(sprintf("%.2f", proportion * 100), "%")),
-                             position = position_stack(vjust = 0.5),
-                             size = 3, color = 'white',
-                             direction     = "y", # or "both", try "y" first
-                             ylim          = c(0, NA),
-                             max.overlaps = 20,
-                             segment.size  = 0.2, # adjust segment line size if needed
-                             segment.color = "grey50", # adjust segment line color if needed
-                             force_pull    = 0.1) +
-    scale_y_continuous(labels = scales::percent_format()) +
+    # ggrepel::geom_text_repel(aes(label = paste0(sprintf("%.2f", proportion * 100), "%")),
+    #                          position = position_stack(vjust = 0.5),
+    #                          size = 3, color = 'white',
+    #                          direction     = "y", # or "both", try "y" first
+    #                          ylim          = c(0, NA),
+    #                          max.overlaps = 20,
+    #                          segment.size  = 0.2, # adjust segment line size if needed
+    #                          segment.color = "grey50", # adjust segment line color if needed
+    #                          force_pull    = 0.1) +
+    scale_y_continuous(labels = scales::percent_format(), expand = c(0,0)) +
+    scale_x_discrete(expand = c(0,0)) + 
     labs(
-      title = "Proportion of Changed Predictions by Initial Prediction", # 2. Add Title
+      title = "Transitions with Noise",
       x = "Initial Prediction",
       y = "Percentage",
       fill = "Noised Prediction"
     ) +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme_bw() # White background
+    theme(
+      legend.position = "none",
+      axis.ticks.y = element_line(color = "black", linewidth = 0.5), # Major ticks
+      axis.text.x = element_text(size = 13, angle = 0),  # X-axis labels
+      axis.text.y = element_text(size = 13, angle = 90, hjust = 0.4), # Y-axis labels
+      axis.title.x = element_text(size = 14),                        # X-axis title
+      axis.title.y = element_text(size = 14),                        # Y-axis title
+      plot.title = element_text(size = 16, face = "bold")           # Main title
+    )
   
   ggsave(paste0(output_prefix_base, "change_proportion_plot.svg"), plot = change_proportion_plot,
-         width = 16, height = 9, units = "in")
+         width = 9, height = 9, units = "in")
   
   
   # 7. Confusion matrix ####
@@ -637,7 +649,7 @@ analyze_noise_impact_on_prediction <- function(
     ggtitle("Confusion Matrix of Predictions") + # 2. Add Title
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank()) + theme_bw() # White background
+          panel.grid.minor = element_blank())
   
   ggsave(paste0(output_prefix_base, "confusion_matrix.svg"), plot = confusion_matrix_plot,
          width = 16, height = 9, units = "in")
@@ -696,7 +708,7 @@ analyze_noise_impact_on_prediction <- function(
     ggtitle("Mapping Score Heatmap") + # 2. Add Title
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank()) + theme_bw() # White background
+          panel.grid.minor = element_blank())
   
   ggsave(paste0(output_prefix_base, "mapping_score_heatmap.svg"), plot = mapping_score_heatmap,
          width = 12, height = 9, units = "in")
@@ -775,7 +787,7 @@ analyze_noise_impact_on_prediction <- function(
     ggtitle("JSD Heatmap") + 
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank()) + theme_bw() # White background
+          panel.grid.minor = element_blank())
   
   ggsave(paste0(output_prefix_base, "jsd_heatmap.svg"), plot = jsd_heatmap,
          width = 12, height = 9, units = "in")
@@ -804,7 +816,7 @@ analyze_noise_impact_on_prediction <- function(
     ggtitle("PSS Heatmap") +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank()) + theme_bw() # White background
+          panel.grid.minor = element_blank())
   
   ggsave(paste0(output_prefix_base, "pss_heatmap.svg"), plot = rss_heatmap,
          width = 12, height = 9, units = "in")
@@ -831,8 +843,8 @@ analyze_noise_impact_on_prediction <- function(
   
   spearman_corr = cor(x=stability_pred[,1], y = stability_pred[,2], method = c("spearman"))
   
-  stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() + theme_bw() +
-    ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5) # 2. Add Title
+  stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() +
+    ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
   
   ggsave(paste0(output_prefix_base, "stability_vs_pss_scatter_plot.svg"), plot = stability_plot,
          width = 12, height = 9, units = "in")
@@ -852,7 +864,7 @@ analyze_noise_impact_on_prediction <- function(
   rss_and_stab$New <- factor(rss_and_stab$New, levels = main_cell_type_order)
   rss_and_stab <- rss_and_stab %>% drop_na()
   
-  plot_all_stab =  ggplot(rss_and_stab, aes(x=PSS, y=Freq)) + geom_point() + theme_minimal() + theme_bw() +
+  plot_all_stab =  ggplot(rss_and_stab, aes(x=PSS, y=Freq)) + geom_point() + theme_minimal() + 
     ggtitle("Freq vs PSS") + geom_text(label=paste0(rss_and_stab$Original,"-", rss_and_stab$New), vjust = 1.5)
   
   ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot.svg"), plot = plot_all_stab,
