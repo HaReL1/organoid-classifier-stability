@@ -82,8 +82,9 @@ FeaturePlot(freedman_seurat_obj, features=c("COL3A1","TOP2A", "AFP"), reduction 
 FeaturePlot(freedman_seurat_obj, features=c("MLANA","SOX2", "MAP2", "PITX2"), reduction = "umap")
 
 # 12. Save the processed object
-saveRDS(freedman_seurat_obj, file = "freedman_seurat_processed.rds")
+save(freedman_seurat_obj,file = "freedman_seurat_processed")
 
+load(file = "freedman_seurat_processed")
 
 freedman_flow = analyze_noise_impact_on_prediction(
   freedman_seurat_obj,

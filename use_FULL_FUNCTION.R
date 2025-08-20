@@ -100,13 +100,15 @@ Uchimura_full_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Uchimura",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/newest_function/Uchimura_noised/",
+  output_prefix_base = "six2gfp/2.7.25/Uchimura_noised/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
   return_all_suerats = FALSE
 )
 # temp_seurat_obj <- readRDS("six2gfp/newest_function/Uchimura_noised/_cache/run_without_noise.rds") # debug
+# main_cell_type_order <- temp_seurat_obj[["cell_type_order"]]
+# noised_prediction = Uchimura_full_flow$noised_prediction_matrix
 
 Takasato_full_flow = analyze_noise_impact_on_prediction(
   seurat_Takasato_Humphreys_20,
@@ -119,7 +121,7 @@ Takasato_full_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Takasato",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/newest_function/Takasato_noised_tranpose/",
+  output_prefix_base = "six2gfp/2.7.25/Takasato_noised_tranpose/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
@@ -193,7 +195,7 @@ cell_atlas_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Kidney Cell Atlas",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/newest_function/kidney_cell_atlas_clean_no_fibroblast/",
+  output_prefix_base = "six2gfp/2.7.25/kidney_cell_atlas_clean_no_fibroblast/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
@@ -211,7 +213,7 @@ nishinakamura_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Nishinakamura",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/newest_function/Nishinakamura_noised/",
+  output_prefix_base = "six2gfp/2.7.25/Nishinakamura_noised/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
@@ -221,3 +223,21 @@ nishinakamura_flow = analyze_noise_impact_on_prediction(
 # fix titles so they will show alwayes the dataset name
 # find another dataset of organoid (friedman or else, not Humphries) and run flow on it.
 # freedman : https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE115986
+load(file = "freedman_seurat_processed")
+freedman_flow = analyze_noise_impact_on_prediction(
+  freedman_seurat_obj,
+  noised_number = 1,
+  train_Six2GFP, 
+  test_Six2GFP,
+  ref_cell_type_column = "type",
+  dims = 1:15,
+  train_title = "SIX2GFP",
+  test_title_prefix = "Freedman",
+  n_neighbors = 8,
+  skip_neighbors = TRUE,
+  output_prefix_base = "six2gfp/2.7.25/freedman_not_clean/",
+  prediction_column_name = "predicted.type", # Column name for predictions in metadata
+  colors_feature_plot_noise = c('grey', '#f03b20'),
+  myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
+  return_all_suerats = FALSE
+)
