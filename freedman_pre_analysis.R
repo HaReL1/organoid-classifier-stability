@@ -1,5 +1,5 @@
 # https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM3204322	#	sample type: singly picked organoid (not whole well)
-# https://pubmed.ncbi.nlm.nih.gov/30626756/ - paper
+# https://pubmed.ncbi.nlm.nih.gov/30626756/ - paper, Harder et al
 # sample type: singly picked organoid
 # time point: Harvested day 20
 library(data.table)

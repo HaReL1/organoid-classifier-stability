@@ -333,7 +333,7 @@ analyze_noise_impact_on_prediction <- function(
     
     test_confusion <- calculate_pairwise_prediction_overlap(test_query, test_title, cell_type_order) # pass cell_type_order
     
-    decision_boundaries_mapped <- visualize_decision_boundaries(test_query,test_query)
+    # decision_boundaries_mapped <- visualize_decision_boundaries(test_query,test_query)
     
     if (!is.null(labeled_test_query)) {
       labeled_test_query <- calculate_entropy(labeled_test_query)
@@ -377,8 +377,8 @@ analyze_noise_impact_on_prediction <- function(
     ggsave(paste0(output_prefix, train_title, "_test_pairwise_confusion.svg"), test_confusion,
            width = 16, height = 9, units = "in")
     
-    ggsave(paste0(output_prefix, "_decision_boundaries_mapped_plot.svg"), plot = decision_boundaries_mapped,
-           width = 16, height = 9, units = "in")
+    # ggsave(paste0(output_prefix, "_decision_boundaries_mapped_plot.svg"), plot = decision_boundaries_mapped,
+    #        width = 16, height = 9, units = "in")
 
     
     # if there is an original plot from first projection
@@ -434,9 +434,9 @@ analyze_noise_impact_on_prediction <- function(
         
       }
       
-      decision_boundaries_original <- visualize_decision_boundaries(plot_on_this_UMAP,test_query)
-      ggsave(paste0(output_prefix, "_decision_boundaries_original_view_plot.svg"), plot = decision_boundaries_original,
-             width = 16, height = 9, units = "in")
+      # decision_boundaries_original <- visualize_decision_boundaries(plot_on_this_UMAP,test_query)
+      # ggsave(paste0(output_prefix, "_decision_boundaries_original_view_plot.svg"), plot = decision_boundaries_original,
+      #        width = 16, height = 9, units = "in")
       
     }
     
@@ -672,7 +672,7 @@ analyze_noise_impact_on_prediction <- function(
               color = "black", fill = NA, linewidth = 1, inherit.aes = FALSE) +
     geom_tile(color = "white") +
     geom_text(aes(label = sprintf("%.2f", Fraction)),
-              size = 8, family = "Arial") +
+              size = 7, family = "Arial") +
     scale_fill_gradient(low = "white",
                         high = "blue",
                         name = "Fraction") +
@@ -882,19 +882,23 @@ analyze_noise_impact_on_prediction <- function(
   RSS_long$P_R <- factor(RSS_long$P_R, levels = main_cell_type_order)
   RSS_long$P_C <- factor(RSS_long$P_C, levels = main_cell_type_order)
   RSS_long <- RSS_long %>% drop_na() # remove rows with NA after filtering
-  
+  RSS_long <- RSS_long %>%
+    mutate(
+      RSS_label = sprintf("%.2f", RSS), 
+      RSS_label = ifelse(RSS_label == "-0.00", "0.00", RSS_label) # correct the "-0.00" issue
+    )
   
   rss_heatmap <- ggplot(RSS_long, aes(x = P_C, y = P_R, fill = RSS)) +
     geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), 
               color = "black", fill = NA, linewidth = 1, inherit.aes = FALSE) +
     geom_tile(color = "white") +
-    geom_text(aes(label = sprintf("%.2f", RSS)),
-              size = 8) +
+    geom_text(aes(label = RSS_label),
+              size = 7, family = "Arial") +
     scale_fill_gradient(low = "white",
                         high = "blue",
                         name = "RSS") +
     theme_minimal() +
-    ggtitle("Prediction specificity score") +
+    ggtitle("Jensen Shannon Similarity") +
     theme(legend.position = "none",
           axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
           axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
@@ -1092,7 +1096,6 @@ analyze_noise_impact_on_prediction <- function(
     })
   }
   
-  
   #####
   # temp_seurat_obj saved as run_without_noise.rds
   # seurat_obj saved as train_seurat_processed.rds
@@ -1106,4 +1109,3 @@ analyze_noise_impact_on_prediction <- function(
     seurat_noised_prediction_list = seurat_noised_prediction_list
   ))
 }
-
