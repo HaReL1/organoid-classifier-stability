@@ -39,6 +39,32 @@ plot_diagonal_comparison <- function(
   if (length(run_results_list) < 1) {
     stop("run_results_list must contain at least one run result")
   }
+
+  # 1. Identify common cell types across ALL runs
+  common_cell_types <- NULL
+  
+  for (run_name in names(run_results_list)) {
+      run_result <- run_results_list[[run_name]]
+      
+      if (is.null(run_result$stability_pred)) {
+          warning(paste("Run", run_name, "missing stability_pred, skipping for cell type intersection"))
+          next
+      }
+      
+      current_types <- rownames(run_result$stability_pred)
+      
+      if (is.null(common_cell_types)) {
+          common_cell_types <- current_types
+      } else {
+          common_cell_types <- intersect(common_cell_types, current_types)
+      }
+  }
+  
+  if (length(common_cell_types) == 0) {
+      stop("No common cell types found across the provided runs.")
+  }
+  print(paste("Common cell types found:", paste(common_cell_types, collapse=", ")))
+
   
   # Extract diagonal data from all runs
   combined_data <- data.frame()
@@ -57,75 +83,93 @@ plot_diagonal_comparison <- function(
     pss_values <- run_result$stability_pred$PSS
     stability_values <- run_result$stability_pred$Stability
     
+    # DEBUG: Print available fields to understand why counts are missing
+    print(paste("Analyzing", run_name, "- Available fields:"))
+    print(names(run_result))
+    
+    # Try to extract cell counts from multiple potential sources
+    cell_counts <- rep(NA, length(cell_types))
+    
+    # Method 1: Try noised_prediction_matrix
+    if (!is.null(run_result$noised_prediction_matrix)) {
+      prediction_vector <- run_result$noised_prediction_matrix[, 1]
+      count_table <- table(prediction_vector)
+      for (i in seq_along(cell_types)) {
+        if (cell_types[i] %in% names(count_table)) {
+          cell_counts[i] <- count_table[cell_types[i]]
+        }
+      }
+      message(paste0("  ", run_name, ": SUCCEEDED - Extracted counts from noised_prediction_matrix"))
+    } 
+    # Method 2: Check if there's a test object with metadata
+    else if (!is.null(run_result$test) && inherits(run_result$test, "Seurat")) {
+        # Extract from Seurat object metadata
+        predicted_types <- run_result$test@meta.data$predicted.type
+        if (!is.null(predicted_types)) {
+          count_table <- table(predicted_types)
+          for (i in seq_along(cell_types)) {
+            if (cell_types[i] %in% names(count_table)) {
+              cell_counts[i] <- count_table[cell_types[i]]
+            }
+          }
+          message(paste0("  ", run_name, ": SUCCEEDED - Extracted counts from Seurat test object"))
+        }
+    } else {
+      message(paste0("  ", run_name, ": FAILED - Could not find cell count data in any known field"))
+    }
+    
     # Create data frame for this run
     run_data <- data.frame(
       cell_type = cell_types,
       pss = pss_values,
       stability = stability_values,
       dataset = run_name,
+      n_cells = cell_counts,
       stringsAsFactors = FALSE
     )
     
     combined_data <- rbind(combined_data, run_data)
   }
+
   
   # Check if we have data
   if (nrow(combined_data) == 0) {
     stop("No valid data extracted from any run")
   }
+
+  # Filter to keep only common cell types
+  combined_data <- combined_data %>% 
+      filter(cell_type %in% common_cell_types)
+
+  # Enforce specific order for cell types
+  desired_order <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","ENDO","MACROPHAG")
+  # Retrieve intersection of desired order and available (common) types to avoid NA levels
+  final_levels <- intersect(desired_order, common_cell_types)
+  
+  if (length(final_levels) < length(common_cell_types)) {
+      warning("Some common cell types are missing from the manual ordering list and will be excluded from the plot.")
+      combined_data <- combined_data %>% filter(cell_type %in% final_levels)
+  }
+
+  combined_data$cell_type <- factor(combined_data$cell_type, levels = final_levels)
   
   # Define colors and shapes for different datasets
   num_datasets <- length(unique(combined_data$dataset))
   dataset_colors <- scales::hue_pal()(num_datasets)
   names(dataset_colors) <- unique(combined_data$dataset)
   
-  # Define different shapes for datasets (max 6 different shapes)
-  dataset_shapes <- c(16, 17, 15, 18, 3, 4)  # circle, triangle, square, diamond, plus, X
-  dataset_shapes <- dataset_shapes[1:min(num_datasets, 6)]
-  names(dataset_shapes) <- unique(combined_data$dataset)
+  # Define different shape isn't strictly needed for bar plots but keeping logic if needed later
+  display_shapes <- c(16, 17, 15, 18, 3, 4) 
   
-  # ===== Plot 1: PSS vs Stability (same as the individual plots but with multiple datasets) =====
-  plot_pss_stability <- ggplot(combined_data, aes(x = pss, y = stability, 
-                                                    color = dataset, shape = dataset)) +
-    geom_point(size = 4, alpha = 0.7) +
-    geom_text_repel(aes(label = cell_type), size = 3, 
-                    box.padding = 0.5, max.overlaps = 20) +
-    scale_color_manual(values = dataset_colors, name = "Dataset") +
-    scale_shape_manual(values = dataset_shapes, name = "Dataset") +
-    labs(
-      title = plot_title_pss,
-      x = "Prediction Specificity Score (PSS)",
-      y = "Stability (Fraction of cells remaining same type)"
-    ) +
-    theme_minimal() +
-    theme(
-      legend.position = "right",
-      legend.text = element_text(size = 12),
-      legend.title = element_text(size = 13, face = "bold"),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 13),
-      plot.title = element_text(size = 15, face = "bold")
-    ) +
-    guides(
-      color = guide_legend(override.aes = list(size = 4)),
-      shape = guide_legend(override.aes = list(size = 4))
-    )
+  # ===== Plot 2a: PSS values comparison - NOT normalized =====
   
-  # Save plot 1
-  ggsave(
-    paste0(output_prefix, "_pss_vs_stability_comparison.svg"),
-    plot = plot_pss_stability,
-    width = 12, height = 8, units = "in"
-  )
-  
-  # ===== Plot 2: Just PSS values comparison across datasets =====
-  # This shows how PSS varies for each cell type across datasets
-  plot_pss_comparison <- ggplot(combined_data, aes(x = cell_type, y = pss, 
-                                                     color = dataset, shape = dataset, group = dataset)) +
-    geom_point(size = 4, alpha = 0.7, position = position_dodge(width = 0.5)) +
-    geom_line(aes(group = dataset), alpha = 0.3, position = position_dodge(width = 0.5)) +
-    scale_color_manual(values = dataset_colors, name = "Dataset") +
-    scale_shape_manual(values = dataset_shapes, name = "Dataset") +
+  plot_pss_comparison <- ggplot(combined_data, aes(x = cell_type, y = pss, fill = dataset)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+    # Removed max dashed line
+    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), "")), 
+              position = position_dodge(width = 0.8), 
+              vjust = -0.5, size = 2.5, angle = 0) +
+    scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
       title = "PSS Self-Similarity by Cell Type Across Datasets",
       x = "Cell Type",
@@ -142,20 +186,23 @@ plot_diagonal_comparison <- function(
       plot.title = element_text(size = 15, face = "bold")
     )
   
-  # Save plot 2
+  # Save plot 2a
   ggsave(
     paste0(output_prefix, "_pss_by_celltype_comparison.svg"),
     plot = plot_pss_comparison,
     width = 12, height = 8, units = "in"
   )
   
-  # ===== Plot 3: Just Stability values comparison across datasets =====
-  plot_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = stability, 
-                                                           color = dataset, shape = dataset, group = dataset)) +
-    geom_point(size = 4, alpha = 0.7, position = position_dodge(width = 0.5)) +
-    geom_line(aes(group = dataset), alpha = 0.3, position = position_dodge(width = 0.5)) +
-    scale_color_manual(values = dataset_colors, name = "Dataset") +
-    scale_shape_manual(values = dataset_shapes, name = "Dataset") +
+  
+  # ===== Plot 3a: Stability values comparison - NOT normalized =====
+  
+  plot_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = stability, fill = dataset)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+    # Removed max dashed line
+    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), "")), 
+              position = position_dodge(width = 0.8), 
+              vjust = -0.5, size = 2.5, angle = 0) +
+    scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
       title = "Stability by Cell Type Across Datasets",
       x = "Cell Type",
@@ -172,12 +219,13 @@ plot_diagonal_comparison <- function(
       plot.title = element_text(size = 15, face = "bold")
     )
   
-  # Save plot 3
+  # Save plot 3a
   ggsave(
     paste0(output_prefix, "_stability_by_celltype_comparison.svg"),
     plot = plot_stability_comparison,
     width = 12, height = 8, units = "in"
   )
+  
   
   # Print summary statistics
   cat("\n=== Summary Statistics ===\n")
@@ -193,9 +241,8 @@ plot_diagonal_comparison <- function(
     )
   print(summary_stats)
   
-  # Return the plots and data
+  # Return the plots and data (Cleaned up list)
   return(list(
-    plot_pss_stability = plot_pss_stability,
     plot_pss_comparison = plot_pss_comparison,
     plot_stability_comparison = plot_stability_comparison,
     combined_data = combined_data,
@@ -203,82 +250,9 @@ plot_diagonal_comparison <- function(
   ))
 }
 
-
-#' Alternative version: Plot with facets instead of overlaying
-#' 
-#' This creates separate panels for each dataset which can make it easier
-#' to see patterns within each dataset
-plot_diagonal_comparison_faceted <- function(
-    run_results_list,
-    output_prefix = "diagonal_comparison_faceted",
-    plot_title = "PSS vs Stability Comparison Across Datasets"
-) {
-  
-  # Extract diagonal data (same as above)
-  combined_data <- data.frame()
-  
-  for (run_name in names(run_results_list)) {
-    run_result <- run_results_list[[run_name]]
-    
-    if (is.null(run_result$stability_pred)) {
-      warning(paste("Run", run_name, "missing stability_pred, skipping"))
-      next
-    }
-    
-    cell_types <- rownames(run_result$stability_pred)
-    pss_values <- run_result$stability_pred$PSS
-    stability_values <- run_result$stability_pred$Stability
-    
-    run_data <- data.frame(
-      cell_type = cell_types,
-      pss = pss_values,
-      stability = stability_values,
-      dataset = run_name,
-      stringsAsFactors = FALSE
-    )
-    
-    combined_data <- rbind(combined_data, run_data)
-  }
-  
-  if (nrow(combined_data) == 0) {
-    stop("No valid data extracted from any run")
-  }
-  
-  # Create faceted plot
-  faceted_plot <- ggplot(combined_data, aes(x = pss, y = stability)) +
-    geom_point(size = 3, alpha = 0.7, color = "red") +
-    geom_text_repel(aes(label = cell_type), size = 2.5, 
-                    box.padding = 0.3, max.overlaps = 15) +
-    facet_wrap(~ dataset, ncol = 2) +
-    labs(
-      title = plot_title,
-      x = "Prediction Specificity Score (PSS)",
-      y = "Stability (Fraction of cells remaining same type)"
-    ) +
-    theme_minimal() +
-    theme(
-      strip.text = element_text(size = 12, face = "bold"),
-      axis.text = element_text(size = 10),
-      axis.title = element_text(size = 12),
-      plot.title = element_text(size = 14, face = "bold")
-    )
-  
-  # Save faceted plot
-  ggsave(
-    paste0(output_prefix, "_faceted.svg"),
-    plot = faceted_plot,
-    width = 12, height = 8, units = "in"
-  )
-  
-  return(list(
-    faceted_plot = faceted_plot,
-    combined_data = combined_data
-  ))
-}
-
-
 a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow, 
                                 "Freedman" = freedman_flow,
-                                "Cell Atlas" = cell_atlas_flow),
-                           output_prefix="six2gfp/26.1.26/diagonal_comparison"
+                                "Cell Atlas" = cell_atlas_flow,
+                                "Takasato" = Takasato_full_flow),
+                           output_prefix="six2gfp/26.1.26/refactored_diagonal_comparison_"
 )
