@@ -118,11 +118,27 @@ plot_diagonal_comparison <- function(
       message(paste0("  ", run_name, ": FAILED - Could not find cell count data in any known field"))
     }
     
+    # Extract per-run stability if available (for error bars)
+    stability_sd_values <- rep(NA, length(cell_types))
+    stability_mean_values <- stability_values  # default: use single-run values
+    
+    if (!is.null(run_result$stability_per_run) && ncol(run_result$stability_per_run) > 1) {
+      for (i in seq_along(cell_types)) {
+        if (cell_types[i] %in% rownames(run_result$stability_per_run)) {
+          per_run_vals <- run_result$stability_per_run[cell_types[i], ]
+          stability_mean_values[i] <- mean(per_run_vals, na.rm = TRUE)
+          stability_sd_values[i] <- sd(per_run_vals, na.rm = TRUE)
+        }
+      }
+      message(paste0("  ", run_name, ": Using mean/SD from ", ncol(run_result$stability_per_run), " noise runs"))
+    }
+    
     # Create data frame for this run
     run_data <- data.frame(
       cell_type = cell_types,
       pss = pss_values,
-      stability = stability_values,
+      stability = stability_mean_values,
+      stability_sd = stability_sd_values,
       dataset = run_name,
       n_cells = cell_counts,
       stringsAsFactors = FALSE
@@ -165,10 +181,9 @@ plot_diagonal_comparison <- function(
   
   plot_pss_comparison <- ggplot(combined_data, aes(x = cell_type, y = pss, fill = dataset)) +
     geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
-    # Removed max dashed line
-    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), "")), 
+    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
               position = position_dodge(width = 0.8), 
-              vjust = -0.5, size = 2.5, angle = 0) +
+              vjust = 0.5, hjust = 0.5, size = 2.5, angle = 90) +
     scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
       title = "PSS Self-Similarity by Cell Type Across Datasets",
@@ -177,7 +192,8 @@ plot_diagonal_comparison <- function(
     ) +
     theme_minimal() +
     theme(
-      legend.position = "right",
+      legend.position = "bottom",
+      legend.direction = "horizontal",
       legend.text = element_text(size = 12),
       legend.title = element_text(size = 13, face = "bold"),
       axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
@@ -190,18 +206,24 @@ plot_diagonal_comparison <- function(
   ggsave(
     paste0(output_prefix, "_pss_by_celltype_comparison.svg"),
     plot = plot_pss_comparison,
-    width = 12, height = 8, units = "in"
+    width = 6, height = 8, units = "in"
   )
   
   
   # ===== Plot 3a: Stability values comparison - NOT normalized =====
   
+  # Check if we have SD data for error bars
+  has_error_bars <- any(!is.na(combined_data$stability_sd))
+  
   plot_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = stability, fill = dataset)) +
     geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
-    # Removed max dashed line
-    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), "")), 
+    geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
               position = position_dodge(width = 0.8), 
-              vjust = -0.5, size = 2.5, angle = 0) +
+              vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
+    { if (has_error_bars) 
+        geom_errorbar(aes(ymin = stability - stability_sd, ymax = stability + stability_sd),
+                      position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+    } +
     scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
       title = "Stability by Cell Type Across Datasets",
@@ -210,7 +232,8 @@ plot_diagonal_comparison <- function(
     ) +
     theme_minimal() +
     theme(
-      legend.position = "right",
+      legend.position = "bottom",
+      legend.direction = "horizontal",
       legend.text = element_text(size = 12),
       legend.title = element_text(size = 13, face = "bold"),
       axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
@@ -223,8 +246,67 @@ plot_diagonal_comparison <- function(
   ggsave(
     paste0(output_prefix, "_stability_by_celltype_comparison.svg"),
     plot = plot_stability_comparison,
-    width = 12, height = 8, units = "in"
+    width = 6, height = 8, units = "in"
   )
+  
+  # ===== Plot 3b: Per-run stability barplots =====
+  # Determine how many runs we have (take max across datasets)
+  max_runs <- 0
+  for (run_name in names(run_results_list)) {
+    spr <- run_results_list[[run_name]]$stability_per_run
+    if (!is.null(spr)) max_runs <- max(max_runs, ncol(spr))
+  }
+  
+  per_run_plots <- list()
+  if (max_runs > 1) {
+    for (run_idx in 1:max_runs) {
+      run_data_all <- data.frame()
+      for (run_name in names(run_results_list)) {
+        spr <- run_results_list[[run_name]]$stability_per_run
+        if (!is.null(spr) && run_idx <= ncol(spr)) {
+          cell_types_run <- rownames(spr)
+          run_df <- data.frame(
+            cell_type = cell_types_run,
+            stability = spr[, run_idx],
+            dataset = run_name,
+            stringsAsFactors = FALSE
+          )
+          run_data_all <- rbind(run_data_all, run_df)
+        }
+      }
+      
+      # Filter and order like the main plot
+      run_data_all <- run_data_all %>% filter(cell_type %in% final_levels)
+      run_data_all$cell_type <- factor(run_data_all$cell_type, levels = final_levels)
+      
+      p_run <- ggplot(run_data_all, aes(x = cell_type, y = stability, fill = dataset)) +
+        geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+        scale_fill_manual(values = dataset_colors, name = "Dataset") +
+        labs(
+          title = paste0("Stability by Cell Type - Run ", run_idx),
+          x = "Cell Type",
+          y = "Stability (Fraction of cells remaining same type)"
+        ) +
+        theme_minimal() +
+        theme(
+          legend.position = "bottom",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13, face = "bold"),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          plot.title = element_text(size = 15, face = "bold")
+        )
+      
+      ggsave(
+        paste0(output_prefix, "_stability_run_", run_idx, ".svg"),
+        plot = p_run,
+        width = 6, height = 8, units = "in"
+      )
+      per_run_plots[[paste0("run_", run_idx)]] <- p_run
+    }
+  }
   
   
   # Print summary statistics
@@ -241,12 +323,57 @@ plot_diagonal_comparison <- function(
     )
   print(summary_stats)
   
+  # Compare stability ranking per cell type (with per-run details)
+  compare_stability_ranking <- function(data, run_results_list) {
+    cat("\n=== Stability Ranking Per Cell Type ===\n")
+    
+    # Mean stability table
+    ranking_df <- data %>%
+      select(cell_type, dataset, stability) %>%
+      pivot_wider(names_from = dataset, values_from = stability)
+    
+    dataset_names <- setdiff(colnames(ranking_df), "cell_type")
+    
+    ranking_df$max_dataset <- apply(ranking_df[, dataset_names], 1, function(row) {
+      dataset_names[which.max(row)]
+    })
+    ranking_df$max_value <- apply(ranking_df[, dataset_names], 1, max, na.rm = TRUE)
+    
+    cat("\n--- Mean Stability ---\n")
+    print(as.data.frame(ranking_df))
+    
+    # Summary: how many cell types each dataset "wins"
+    cat("\n--- Stability wins per dataset ---\n")
+    wins <- table(ranking_df$max_dataset)
+    print(wins)
+    
+    # Per-run details for each dataset
+    for (run_name in names(run_results_list)) {
+      run_result <- run_results_list[[run_name]]
+      if (!is.null(run_result$stability_per_run) && ncol(run_result$stability_per_run) > 1) {
+        cat(paste0("\n--- ", run_name, ": Per-Run Stability ---\n"))
+        per_run <- run_result$stability_per_run
+        # Add mean and SD columns
+        per_run_df <- as.data.frame(per_run)
+        per_run_df$mean <- rowMeans(per_run, na.rm = TRUE)
+        per_run_df$sd <- apply(per_run, 1, sd, na.rm = TRUE)
+        print(round(per_run_df, 4))
+      }
+    }
+    cat("\n")
+    
+    return(ranking_df)
+  }
+  
+  stability_ranking <- compare_stability_ranking(combined_data, run_results_list)
+  
   # Return the plots and data (Cleaned up list)
   return(list(
     plot_pss_comparison = plot_pss_comparison,
     plot_stability_comparison = plot_stability_comparison,
     combined_data = combined_data,
-    summary_stats = summary_stats
+    summary_stats = summary_stats,
+    stability_ranking = stability_ranking
   ))
 }
 
@@ -254,5 +381,5 @@ a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow,
                                 "Freedman" = freedman_flow,
                                 "Cell Atlas" = cell_atlas_flow,
                                 "Takasato" = Takasato_full_flow),
-                           output_prefix="six2gfp/26.1.26/refactored_diagonal_comparison_"
+                           output_prefix="six2gfp/12.3.26/thin_diagonal_comparison_with_var_"
 )

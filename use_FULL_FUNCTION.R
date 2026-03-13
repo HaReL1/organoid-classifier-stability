@@ -92,7 +92,7 @@ load(file = "freedman_seurat_processed") # - Figure 3
 
 Uchimura_full_flow = analyze_noise_impact_on_prediction(
   seurat_Uchimura_Humphreys_20,
-  noised_number = 1,
+  noised_number = 3,
   train_Six2GFP, # change to labeled_train_data
   test_Six2GFP, # change to labeled_test_data
   ref_cell_type_column = "type",
@@ -113,7 +113,7 @@ Uchimura_full_flow = analyze_noise_impact_on_prediction(
 
 freedman_flow = analyze_noise_impact_on_prediction(
   freedman_seurat_obj,
-  noised_number = 1,
+  noised_number = 3,
   train_Six2GFP, 
   test_Six2GFP,
   ref_cell_type_column = "type",
@@ -131,7 +131,7 @@ freedman_flow = analyze_noise_impact_on_prediction(
 
 cell_atlas_flow = analyze_noise_impact_on_prediction(
   atlas_object,
-  noised_number = 1,
+  noised_number = 3,
   train_Six2GFP, 
   test_Six2GFP,
   ref_cell_type_column = "type",
@@ -151,7 +151,7 @@ cell_atlas_flow = analyze_noise_impact_on_prediction(
 
 Takasato_full_flow = analyze_noise_impact_on_prediction(
   seurat_Takasato_Humphreys_20,
-  noised_number = 1,
+  noised_number = 3,
   train_Six2GFP, # change to labeled_train_data
   test_Six2GFP, # change to labeled_test_data
   ref_cell_type_column = "type",
@@ -160,7 +160,7 @@ Takasato_full_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Takasato",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/22.1.26/Takasato_noised_tranpose/",
+  output_prefix_base = "six2gfp/26.1.26/Takasato_noised_tranpose/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used

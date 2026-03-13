@@ -1,4 +1,4 @@
-library(randomForest)
+# library(randomForest)
 library(Seurat)
 library(ggplot2)
 library(dplyr)
@@ -928,6 +928,23 @@ analyze_noise_impact_on_prediction <- function(
     stability_pred[i,2] = conf_matrix_fraction[type, type] # from stage #5.5
   }
   
+  # 10.1 Per-run stability (for variability / error bars) ####
+  stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
+                              dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
+  for (run_idx in 1:noised_number) {
+    run_conf <- table(Original = noised_prediction[, 1],
+                      New = noised_prediction[, run_idx + 1])
+    # Filter to types we're working with
+    common_types <- intersect(intersect(rownames(run_conf), colnames(run_conf)), types_to_run_on)
+    if (length(common_types) > 0) {
+      run_conf_filtered <- run_conf[common_types, common_types, drop = FALSE]
+      run_conf_frac <- prop.table(run_conf_filtered, margin = 1)
+      for (type in common_types) {
+        stability_per_run[type, run_idx] <- run_conf_frac[type, type]
+      }
+    }
+  }
+  
   stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() +
     ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
   
@@ -1038,6 +1055,9 @@ analyze_noise_impact_on_prediction <- function(
   ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot_with_fit.svg"), 
          plot = plot_all_stab_with_fit,
          width = 12, height = 8, units = "in")
+  ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot_with_fit_thin.svg"), 
+         plot = plot_all_stab_with_fit,
+         width = 6, height = 8, units = "in")
   
   stability_only_plot <- ggplot(stability_data, aes(x = PSS, y = Freq)) +
     geom_point(color = "red", size = 4, alpha = 0.7) +
@@ -1106,6 +1126,7 @@ analyze_noise_impact_on_prediction <- function(
     jsd_matrix = JSD_mat,
     pss_matrix = RSS_mat,
     stability_pred = stability_pred,
+    stability_per_run = stability_per_run,
     seurat_noised_prediction_list = seurat_noised_prediction_list
   ))
 }
