@@ -67,6 +67,7 @@ load(file = "freedman_seurat_processed") # - Figure 3
                                                      assay = "RNA")
   remove(Takasato_Humphreys_20)
 } # load Takasato (seurat_Takasato_Humphreys_20)
+
 {GSM2879360_Org1 <- read.table(gzfile("urine_based/GSM2879360_Org1_HMKJWBGXY_S1.gene.coutt.txt.gz"), header = TRUE, sep = "\t", row.names = 1)
   GSM2879361_Org2 <- read.table(gzfile("urine_based/GSM2879361_Org2_HMKJWBGXY_S2.gene.coutt.txt.gz"), header = TRUE, sep = "\t", row.names = 1)
   # rownames(GSM2879360_Org1)[grep("RNF5P1",rownames(GSM2879360_Org1))] # two with the sam name...
@@ -90,9 +91,11 @@ load(file = "freedman_seurat_processed") # - Figure 3
   remove(expression_matrix)
 } # Nishinakamura
 
+source("FULL_FUNCTION.R")
+
 Uchimura_full_flow = analyze_noise_impact_on_prediction(
   seurat_Uchimura_Humphreys_20,
-  noised_number = 3,
+  noised_number = 5,
   train_Six2GFP, # change to labeled_train_data
   test_Six2GFP, # change to labeled_test_data
   ref_cell_type_column = "type",
@@ -105,15 +108,20 @@ Uchimura_full_flow = analyze_noise_impact_on_prediction(
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE
+  return_all_suerats = FALSE,
+  use_cache = TRUE,
+  return_anchors = TRUE
 )
+saveRDS(Uchimura_full_flow, "six2gfp/26.1.26/Uchimura_full_flow5noise.rds")
+# cell_atlas_flow <- readRDS("six2gfp/26.1.26/Uchimura_full_flow5noise.rds")
+
 # temp_seurat_obj <- readRDS("six2gfp/newest_function/Uchimura_noised/_cache/run_without_noise.rds") # debug
 # main_cell_type_order <- temp_seurat_obj[["cell_type_order"]]
 # noised_prediction = Uchimura_full_flow$noised_prediction_matrix
 
 freedman_flow = analyze_noise_impact_on_prediction(
   freedman_seurat_obj,
-  noised_number = 3,
+  noised_number = 10,
   train_Six2GFP, 
   test_Six2GFP,
   ref_cell_type_column = "type",
@@ -131,7 +139,7 @@ freedman_flow = analyze_noise_impact_on_prediction(
 
 cell_atlas_flow = analyze_noise_impact_on_prediction(
   atlas_object,
-  noised_number = 3,
+  noised_number = 5,
   train_Six2GFP, 
   test_Six2GFP,
   ref_cell_type_column = "type",
@@ -140,18 +148,19 @@ cell_atlas_flow = analyze_noise_impact_on_prediction(
   test_title_prefix = "Kidney Cell Atlas",
   n_neighbors = 8,
   skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/22.1.26/kidney_cell_atlas_clean_no_fibroblast/",
+  output_prefix_base = "six2gfp/26.1.26/kidney_cell_atlas_clean_no_fibroblast/",
   prediction_column_name = "predicted.type", # Column name for predictions in metadata
   colors_feature_plot_noise = c('grey', '#f03b20'),
   myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE
+  return_all_suerats = FALSE,
+  return_anchors = TRUE
 )
-
-###### Extra stuff ####
+saveRDS(cell_atlas_flow, "six2gfp/26.1.26/cell_atlas_flow5noise.rds")
+# cell_atlas_flow <- readRDS("six2gfp/26.1.26/cell_atlas_flow5noise.rds")
 
 Takasato_full_flow = analyze_noise_impact_on_prediction(
   seurat_Takasato_Humphreys_20,
-  noised_number = 3,
+  noised_number = 10,
   train_Six2GFP, # change to labeled_train_data
   test_Six2GFP, # change to labeled_test_data
   ref_cell_type_column = "type",
@@ -167,6 +176,20 @@ Takasato_full_flow = analyze_noise_impact_on_prediction(
   return_all_suerats = FALSE
 )
 
+# save results
+saveRDS(Uchimura_full_flow, "/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
+Uchimura_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
+
+saveRDS(freedman_flow, "/lab/six2gfp/12.3.26/10runs_freedman_flow")
+freedman_flow = readRDS("/lab/six2gfp/12.3.26/10runs_freedman_flow")
+
+saveRDS(cell_atlas_flow, "/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
+cell_atlas_flow = readRDS("/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
+
+saveRDS(Takasato_full_flow, "/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
+Takasato_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
+
+###### Extra stuff ####
 Tubuloid_full_flow = analyze_noise_impact_on_prediction(
   tubuloid_seurat,
   noised_number = 2,

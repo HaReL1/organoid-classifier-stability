@@ -30,7 +30,8 @@ analyze_noise_impact_on_prediction <- function(
     myColors_cell_types = NULL,
     return_all_suerats = FALSE,
     min_cell_count_for_type = 3,
-    use_cache = TRUE
+    use_cache = TRUE,
+    return_anchors = FALSE
 ) {
   # 0. Create output directory if it doesn't exist ####
   if (!dir.exists(output_prefix_base)) {
@@ -79,7 +80,8 @@ analyze_noise_impact_on_prediction <- function(
                                        myColors = NULL,
                                        output_prefix = "output",
                                        min_cell_count_for_type = 3,
-                                       use_cache = TRUE)  {
+                                       use_cache = TRUE,
+                                       return_anchors = FALSE)  {
     
     t1 <- Sys.time()
     
@@ -136,6 +138,7 @@ analyze_noise_impact_on_prediction <- function(
       labeled_test_query = NULL
     }
 
+    test_anchors_result <- NULL
     if (use_cache && file.exists(test_query_cache_file)) {
       print(paste0("Loading cached test query (initial)... ", test_query_cache_file))
       test_query <- readRDS(test_query_cache_file)
@@ -144,6 +147,9 @@ analyze_noise_impact_on_prediction <- function(
       test_data <- NormalizeData(test_data)
       test_anchors <- FindTransferAnchors(reference = train_labeled_seurat, query = test_data, dims = dims,
                                           reference.reduction = "pca")
+      if (return_anchors) {
+        test_anchors_result <- test_anchors
+      }
       test_query <- MapQuery(anchorset = test_anchors, reference = train_labeled_seurat, query = test_data,
                              refdata = setNames(list(ref_cell_type_column),ref_cell_type_column), reference.reduction = "pca",
                              reduction.model = "umap")
@@ -447,7 +453,8 @@ analyze_noise_impact_on_prediction <- function(
     return(list(train = train_labeled_seurat, labeled_test = labeled_test_query,
                 test = test_query, runtime = difftime(t2, t1),
                 quantile_80 = quantile_80, test_query_neighbors = test_query_neighbors, runtime_message = runtime_message,
-                cell_type_order = cell_type_order))
+                cell_type_order = cell_type_order,
+                test_anchors = test_anchors_result))
   }
   
   # 2.5 run process_seurat_data_iter for the first time and get prediction ####
@@ -493,7 +500,8 @@ analyze_noise_impact_on_prediction <- function(
       skip_neighbors = skip_neighbors,
       output_prefix = paste0(output_prefix_base, "0_silent_"), # without noise...
       min_cell_count_for_type = min_cell_count_for_type,
-      use_cache = use_cache
+      use_cache = use_cache,
+      return_anchors = return_anchors
     )
     if (use_cache) {
       print("Caching without noise run...")
@@ -506,6 +514,7 @@ analyze_noise_impact_on_prediction <- function(
   # 3. Run noise noised_number times and keep relevant data ####
   noised_prediction = matrix('0', nrow = ncol(seurat_obj), ncol = noised_number+1)
   seurat_noised_prediction_list <- list()
+  noised_anchors_list <- list()
   rownames(noised_prediction) = colnames(seurat_obj)
   noised_prediction[,1] = temp_seurat_obj[["test"]]@meta.data[[prediction_column_name]]
   for( k in c(1:noised_number)) {
@@ -526,7 +535,8 @@ analyze_noise_impact_on_prediction <- function(
       myColors = myColors_cell_types,
       output_prefix = paste0(output_prefix_base,"noised",k,"_"),
       min_cell_count_for_type = min_cell_count_for_type,
-      use_cache = use_cache
+      use_cache = use_cache,
+      return_anchors = return_anchors
     )
     # # restore initial test_query object to avoid re-run initial steps ??? I think gemini is wrong here
     # results_noised[["test"]]@reductions[["ref.umap"]] = initial_test_query@reductions[["ref.umap"]]
@@ -537,6 +547,9 @@ analyze_noise_impact_on_prediction <- function(
     noised_prediction[,k+1] = results_noised[["test"]]@meta.data[[prediction_column_name]]
     if (return_all_suerats){
       seurat_noised_prediction_list[[paste0("iter",k)]] = results_noised
+    }
+    if (return_anchors && !is.null(results_noised$test_anchors)) {
+      noised_anchors_list[[paste0("iter",k)]] = results_noised$test_anchors
     }
   }
   
@@ -653,10 +666,13 @@ analyze_noise_impact_on_prediction <- function(
   conf_matrix <- table(Original = noised_prediction[,1],
                        New = noised_prediction[,ncol(noised_prediction)])
   
-  # Handling Small Groups - Filter out small groups from confusion matrix
+  # Handling Small Groups - Filter ROWS by original count, keep ALL columns that appear in New
   types_counts_conf_matrix <- rowSums(conf_matrix)
-  types_to_keep_conf_matrix <- names(types_counts_conf_matrix)[types_counts_conf_matrix >= min_cell_count_for_type]
-  conf_matrix_filtered <- conf_matrix[types_to_keep_conf_matrix, types_to_keep_conf_matrix, drop=FALSE]
+  rows_to_keep <- names(types_counts_conf_matrix)[types_counts_conf_matrix >= min_cell_count_for_type]
+  cols_to_keep <- colnames(conf_matrix)  # keep all types appearing in noised predictions
+  # Only keep columns that also exist in rows (for consistent ordering), plus any new ones
+  cols_to_keep <- union(rows_to_keep, colnames(conf_matrix)[colSums(conf_matrix[rows_to_keep, , drop=FALSE]) > 0])
+  conf_matrix_filtered <- conf_matrix[rows_to_keep, cols_to_keep, drop=FALSE]
   
   conf_matrix_fraction <- prop.table(conf_matrix_filtered, margin = 1) # * 100
   conf_matrix_long <- as.data.frame(as.table(conf_matrix_fraction))
@@ -918,19 +934,32 @@ analyze_noise_impact_on_prediction <- function(
   
   print(paste0("running on types:[",paste(types_to_run_on,sep =","),"]"))
   stability_pred = matrix(0, nrow = length(types_to_run_on),
-                          ncol = 2,
-                          dimnames = list(types_to_run_on,c("PSS","Stability")))
+                          ncol = 3,
+                          dimnames = list(types_to_run_on,c("PSS","Stability","Bi_Stability")))
   stability_pred = as.data.frame(stability_pred)
   for (i in seq_along(types_to_run_on)){
     type = types_to_run_on[i]
     # print(paste0("calculating stability for...", type))
     stability_pred[i,1] = RSS_mat_filtered[type, type] # from stage #9
     stability_pred[i,2] = conf_matrix_fraction[type, type] # from stage #5.5
+    
+    # Bidirectional stability: penalizes both outflow AND inflow
+    # out = cells originally type X that changed to something else
+    # in  = cells from other types that became type X after noise
+    # Bi_Stability = max(0, 1 - (out + in) / original)
+    stayed <- conf_matrix_filtered[type, type]           # diagonal (raw count)
+    original_count <- sum(conf_matrix_filtered[type, ])  # row sum
+    noised_count <- sum(conf_matrix_filtered[, type])    # column sum
+    out_count <- original_count - stayed
+    in_count <- noised_count - stayed
+    stability_pred[i,3] = max(0, 1 - (out_count + in_count) / original_count)
   }
   
   # 10.1 Per-run stability (for variability / error bars) ####
   stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
                               dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
+  bi_stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
+                                  dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
   for (run_idx in 1:noised_number) {
     run_conf <- table(Original = noised_prediction[, 1],
                       New = noised_prediction[, run_idx + 1])
@@ -941,6 +970,13 @@ analyze_noise_impact_on_prediction <- function(
       run_conf_frac <- prop.table(run_conf_filtered, margin = 1)
       for (type in common_types) {
         stability_per_run[type, run_idx] <- run_conf_frac[type, type]
+        # Bidirectional stability per run
+        stayed_run <- run_conf_filtered[type, type]
+        original_run <- sum(run_conf_filtered[type, ])
+        noised_run <- sum(run_conf_filtered[, type])
+        out_run <- original_run - stayed_run
+        in_run <- noised_run - stayed_run
+        bi_stability_per_run[type, run_idx] <- max(0, 1 - (out_run + in_run) / original_run)
       }
     }
   }
@@ -1055,9 +1091,6 @@ analyze_noise_impact_on_prediction <- function(
   ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot_with_fit.svg"), 
          plot = plot_all_stab_with_fit,
          width = 12, height = 8, units = "in")
-  ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot_with_fit_thin.svg"), 
-         plot = plot_all_stab_with_fit,
-         width = 6, height = 8, units = "in")
   
   stability_only_plot <- ggplot(stability_data, aes(x = PSS, y = Freq)) +
     geom_point(color = "red", size = 4, alpha = 0.7) +
@@ -1127,6 +1160,9 @@ analyze_noise_impact_on_prediction <- function(
     pss_matrix = RSS_mat,
     stability_pred = stability_pred,
     stability_per_run = stability_per_run,
-    seurat_noised_prediction_list = seurat_noised_prediction_list
+    bi_stability_per_run = bi_stability_per_run,
+    seurat_noised_prediction_list = seurat_noised_prediction_list,
+    initial_anchors = temp_seurat_obj$test_anchors,
+    noised_anchors = noised_anchors_list
   ))
 }
