@@ -1038,107 +1038,111 @@ analyze_noise_impact_on_prediction <- function(
   rss_and_stab <- dplyr::left_join(conf_long, pss_long, by = c("Original", "New"))
   rss_and_stab$is_diagonal <- rss_and_stab$Original == rss_and_stab$New
   
-  # Linear fit 
-  stability_data <- rss_and_stab %>% 
-    filter(is_diagonal == TRUE)
-  fit <- lm(Freq ~ PSS, data = stability_data)
-  fit_summary <- summary(fit)
-  intercept <- coef(fit)[1]
-  slope <- coef(fit)[2]
-  r_squared <- fit_summary$r.squared
-  p_value_pss=fit_summary$coefficients["PSS","Pr(>|t|)"]
-  equation_string <- sprintf("y = %.2f x + %.2f", slope, intercept)
-  r_squared_string <- sprintf("R² = %.3f ; Pval = %.3f", r_squared, p_value_pss)
-  
-  spearman_test_diagonal <- cor.test(x = stability_pred$PSS, 
-                                     y = stability_pred$Stability, 
-                                     method = "spearman",
-                                     exact = FALSE) # Use exact=FALSE for robustness if there are ties
-  spearman_corr_diagonal <- spearman_test_diagonal$estimate  # The rho coefficient
-  spearman_pval_diagonal <- spearman_test_diagonal$p.value    # The p-value
-  spearman_corr_all = cor.test(x=rss_and_stab[,3], y = rss_and_stab[,4], method = c("spearman"),exact = FALSE)
-  # significant_threshold = 0.20
-  # over_threshold <- rss_and_stab$Freq >= significant_threshold
-  # spearman_corr_significant <- cor(x = rss_and_stab$Freq[over_threshold], 
-  #                                  y = rss_and_stab$PSS[over_threshold], 
-  #                                  method = "spearman")
-  
+  # Match Original column to stability_pred rownames
+  match_idx <- match(as.character(rss_and_stab$Original), rownames(stability_pred))
+  rss_and_stab$Bi_Stability <- ifelse(rss_and_stab$is_diagonal, stability_pred$Bi_Stability[match_idx], rss_and_stab$Freq)
+  rss_and_stab$F1_Stability <- ifelse(rss_and_stab$is_diagonal, stability_pred$F1_Stability[match_idx], rss_and_stab$Freq)
+
   # Consistent Order in Heatmaps - Order full stability plot
   rss_and_stab$Original <- factor(rss_and_stab$Original, levels = main_cell_type_order)
   rss_and_stab$New <- factor(rss_and_stab$New, levels = main_cell_type_order)
   rss_and_stab <- rss_and_stab %>% drop_na()
+
+  # Define function to generate the 3 plots per metric
+  generate_scatter_plots <- function(metric_col, output_suffix, title_prefix, df_all) {
+    df_diag <- df_all %>% filter(is_diagonal == TRUE)
+    fit <- lm(as.formula(paste(metric_col, "~ PSS")), data = df_diag)
+    fit_summary <- summary(fit)
+    intercept <- coef(fit)[1]
+    slope <- coef(fit)[2]
+    r_squared <- fit_summary$r.squared
+    
+    # Safely extract p-value
+    p_value_pss <- NA
+    if ("PSS" %in% rownames(fit_summary$coefficients)) {
+      p_value_pss <- fit_summary$coefficients["PSS","Pr(>|t|)"]
+    }
+    if(is.na(p_value_pss) || is.null(p_value_pss)){
+       p_value_pss <- 1
+    }
+
+    equation_string <- sprintf("y = %.2f x + %.2f", slope, intercept)
+    r_squared_string <- sprintf("R² = %.3f ; Pval = %.3f", r_squared, p_value_pss)
+
+    spearman_test_diagonal <- cor.test(x = df_diag$PSS, 
+                                       y = df_diag[[metric_col]], 
+                                       method = "spearman",
+                                       exact = FALSE)
+    spearman_corr_diagonal <- spearman_test_diagonal$estimate
+    spearman_pval_diagonal <- spearman_test_diagonal$p.value
+    
+    spearman_corr_all <- cor.test(x = df_all$PSS, y = df_all[[metric_col]], method = "spearman", exact = FALSE)
+    
+    plot_all <- ggplot(df_all, aes(x = PSS, y = .data[[metric_col]])) +
+      geom_point(aes(color = is_diagonal), size = 3.5, alpha = 0.8) + theme_minimal() + 
+      scale_color_manual(
+        name = "Transition Type", 
+        values = c("TRUE" = "red", "FALSE" = "black"),
+        labels = c("TRUE" = paste("Self-Transition (", title_prefix, ")", sep=""), "FALSE" = "Cross-Transition")
+      ) +
+      geom_text(label = paste0(df_all$Original,"-", df_all$New), vjust = 1.5, size = 12/.pt) + 
+      annotate("text", x = Inf, y = -Inf,
+               label = paste("Spearman Coefficient:", round(spearman_corr_diagonal, 3), "; pVal:", round(spearman_pval_diagonal, 3)),
+               hjust = 1.05, vjust = -1.5, size = 9) +
+      annotate("text", x = Inf, y = -Inf,
+               label = paste("Spearman all:", round(spearman_corr_all$estimate, 3), "; pVal:", round(spearman_corr_all$p.value, 3)),
+               hjust = 1.05, vjust = -0.5, size = 9) +
+      xlab("Prediction specificity score") + 
+      ylab(paste("Fraction of transitions /", title_prefix)) +
+      scale_x_continuous(limits = c(0, 1)) +
+      scale_y_continuous(limits = c(0, 1)) +
+      theme(legend.position = "none",
+            axis.text.x = element_text(size = 13, angle = 45),
+            axis.text.y = element_text(size = 13, angle = 0, hjust = 0.5),
+            axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 14),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank())
+    
+    ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot", output_suffix, ".svg"), plot = plot_all,
+           width = 12, height = 8, units = "in")
+           
+    plot_all_with_fit <- plot_all + 
+      geom_abline(intercept = intercept, slope = slope, color = "blue", linetype = "dashed", linewidth = 1) +
+      annotate("text", x = Inf, y = Inf,
+               label = paste(equation_string, r_squared_string, sep = "\n"),
+               hjust = 1.05, vjust = 1.2,
+               size = 4, color = "blue")
+    
+    ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot", output_suffix, "_with_fit.svg"), 
+           plot = plot_all_with_fit,
+           width = 12, height = 8, units = "in")
+           
+    stability_only_plot <- ggplot(df_diag, aes(x = PSS, y = .data[[metric_col]])) +
+      geom_point(color = "red", size = 4, alpha = 0.7) +
+      geom_abline(intercept = intercept, slope = slope, color = "blue", linetype = "dashed", linewidth = 1) +
+      annotate("text", 
+               x = min(df_diag$PSS),
+               y = max(df_diag[[metric_col]]), 
+               label = paste(equation_string, r_squared_string, sep = "\n"),
+               hjust = 0, vjust = 1,
+               size = 5,
+               parse = FALSE) +
+      geom_text_repel(aes(label = Original), size = 3.5, box.padding = 0.5) +
+      labs(
+        title = paste(title_prefix, "vs. Prediction Specificity Score (PSS)"),
+        subtitle = "Analysis of self-transitions (Original = New Prediction)",
+        x = "Prediction Specificity Score (PSS)",
+        y = paste(title_prefix, "(% of cells remaining same type after noise)")
+      ) +
+      theme_minimal()
+    ggsave(paste0(output_prefix_base, "stability_pss_linear_fit", output_suffix, ".svg"), plot = stability_only_plot,
+           width = 8, height = 7, units = "in")
+  }
   
-  plot_all_stab =  ggplot(rss_and_stab, aes(x=PSS, y=Freq)) +
-    # geom_rect(
-    #   data = data.frame(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf),
-    #   aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-    #   color = "black",
-    #   fill = NA, linewidth = 1, inherit.aes = FALSE) +
-    geom_point(aes(color = is_diagonal), size = 3.5, alpha = 0.8) + theme_minimal() + 
-    scale_color_manual(
-      name = "Transition Type", 
-      values = c("TRUE" = "red", "FALSE" = "black"),
-      labels = c("TRUE" = "Self-Transition (Stability)", "FALSE" = "Cross-Transition")
-    ) +
-    geom_text(label=paste0(rss_and_stab$Original,"-", rss_and_stab$New), vjust = 1.5, size = 12/.pt) + 
-    # geom_hline(yintercept = significant_threshold, linetype = "dashed", color = "red", size = 0.7) +
-    # annotate("text", x = -Inf, y = significant_threshold, label = paste0("Threshold = ",significant_threshold),
-    #          hjust = -0.1, vjust = -0.5, size = 9, color = "red") +
-    # annotate("text", x = Inf, y = -Inf,
-    #          label = paste("Spearman above threshold:", round(spearman_corr_significant, 3)),
-    #          hjust = 1.05, vjust = -2.5, size = 9) +
-    annotate("text", x = Inf, y = -Inf,
-             label = paste("Spearman Coefficient:", round(spearman_corr_diagonal, 3), "; pVal:", round(spearman_pval_diagonal, 3)),
-             hjust = 1.05, vjust = -1.5, size = 9) +
-    annotate("text", x = Inf, y = -Inf,
-             label = paste("Spearman all:", round(spearman_corr_all$estimate, 3), "; pVal:", round(spearman_corr_all$p.value, 3)),
-             hjust = 1.05, vjust = -0.5, size = 9) +
-    xlab("Prediction specificity score") + 
-    ylab("Fraction of transitions with noise")+
-    scale_x_continuous(limits = c(0, 1)) +
-    scale_y_continuous(limits = c(0, 1)) +
-    theme(legend.position = "none",
-          axis.text.x = element_text(size = 13, angle = 45),
-          axis.text.y = element_text(size = 13, angle = 0, hjust = 0.5),
-          axis.title.x = element_text(size = 14),
-          axis.title.y = element_text(size = 14),
-          panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-  
-  ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot.svg"), plot = plot_all_stab,
-         width = 12, height = 8, units = "in")
-  
-  plot_all_stab_with_fit <- plot_all_stab + 
-    geom_abline(intercept = intercept, slope = slope, color = "blue", linetype = "dashed", size = 1) +
-    annotate("text", x = Inf, y = Inf,
-             label = paste(equation_string, r_squared_string, sep = "\n"),
-             hjust = 1.05, vjust = 1.2, # Adjust to place it neatly inside the plot area
-             size = 4, color = "blue")
-  
-  ggsave(paste0(output_prefix_base, "all_freq_vs_pss_scatter_plot_with_fit.svg"), 
-         plot = plot_all_stab_with_fit,
-         width = 12, height = 8, units = "in")
-  
-  stability_only_plot <- ggplot(stability_data, aes(x = PSS, y = Freq)) +
-    geom_point(color = "red", size = 4, alpha = 0.7) +
-    geom_abline(intercept = intercept, slope = slope, color = "blue", linetype = "dashed", size = 1) +
-    annotate("text", 
-             x = min(stability_data$PSS), # Position at the minimum x
-             y = max(stability_data$Freq),  # Position at the maximum y
-             label = paste(equation_string, r_squared_string, sep = "\n"), # '\n' creates a new line
-             hjust = 0, vjust = 1, # Align text to top-left corner
-             size = 5,
-             parse = FALSE) +
-    geom_text_repel(aes(label = Original), size = 3.5, box.padding = 0.5) +
-    labs(
-      title = "Stability vs. Prediction Specificity Score (PSS)",
-      subtitle = "Analysis of self-transitions (Original = New Prediction)",
-      x = "Prediction Specificity Score (PSS)",
-      y = "Stability (% of cells remaining same type after noise)"
-    ) +
-    theme_minimal()
-  ggsave(paste0(output_prefix_base, "stability_pss_linear_fit.svg"), plot = stability_only_plot,
-         width = 8, height = 7, units = "in")
+  generate_scatter_plots("Freq", "", "Stability", rss_and_stab)
+  generate_scatter_plots("Bi_Stability", "_bi", "Bi_Stability", rss_and_stab)
+  generate_scatter_plots("F1_Stability", "_f1", "F1_Stability", rss_and_stab)
   
   
   # 11. set chosen plots in place ####
@@ -1149,6 +1153,8 @@ analyze_noise_impact_on_prediction <- function(
   }
   files_to_move = c("0_silent__original_view_only_prediction_A.svg",
                     "all_freq_vs_pss_scatter_plot_with_fit.svg",
+                    "all_freq_vs_pss_scatter_plot_bi_with_fit.svg",
+                    "all_freq_vs_pss_scatter_plot_f1_with_fit.svg",
                     "change_proportion_plot.svg",
                     "confusion_matrix.svg",
                     "pss_heatmap.svg",
