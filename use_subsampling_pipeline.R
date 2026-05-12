@@ -1,279 +1,121 @@
 # =============================================================================
 # Usage of Subsampling Pipeline
 # =============================================================================
-# This script shows how to use the subsampling_pipeline.R functions:
-#   - Remove one or more cell types from a dataset
-#   - Re-classify and compare stability/PSS changes
-#   - Optionally export and analyze transfer anchors
+# This script runs the subsampling stability analysis for each dataset.
+# For each dataset (Atlas, Uchimura, Freedman):
+#   A. Compute baseline flow (with anchors) — or reuse existing
+#   B. Remove EACH cell type individually (loop)
+#   C. Remove specific multi-group combinations
+#   D. Plot all comparisons at the end of each section
 #
-# Prerequisites: 
-#   - source("FULL_FUNCTION.R")   # for analyze_noise_impact_on_prediction
-#   - source("subsampling_pipeline.R")
-#   - Datasets and flow results loaded (from use_FULL_FUNCTION.R)
+# Prerequisites:
+#   - Datasets loaded from use_FULL_FUNCTION.R:
+#     atlas_object, seurat_Uchimura_Humphreys_20, freedman_seurat_obj
+#   - Baseline flows loaded: cell_atlas_flow, Uchimura_full_flow, freedman_flow
+#   - train_Six2GFP, test_Six2GFP
 # =============================================================================
 
 source("FULL_FUNCTION.R")
 source("subsampling_pipeline.R")
+source("plot_subsampling_comparison.R")
 
-# ============================================================
-# Example 1: Remove a single type from Atlas — step by step
-# ============================================================
 
-# Step 1: Remove all LOH cells
-no_loh <- create_subsampled_seurat(
-  seurat_obj    = atlas_object,
-  flow_result   = cell_atlas_flow,
-  target_labels = "LOH",
-  keep_fraction = 0.0,
-  seed          = 42
-)
-
-# Step 2: Run full analysis on subsampled data
-no_loh_flow <- analyze_noise_impact_on_prediction(
-  no_loh$seurat,
-  noised_number = 3,
-  train_Six2GFP,
-  test_Six2GFP,
-  ref_cell_type_column = "type",
-  dims = 1:30,
-  train_title = "SIX2GFP",
-  test_title_prefix = "Atlas_no_LOH",
-  n_neighbors = 8,
-  skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/atlas_no_LOH/",
-  prediction_column_name = "predicted.type",
-  colors_feature_plot_noise = c('grey', '#f03b20'),
-  myColors_cell_types = NULL,
-  return_all_suerats = FALSE,
-  use_cache = FALSE
-)
-
-# Step 3: Compare — PSS, stability, and what gets predicted as LOH now
-comparison <- compare_flows(
-  original_flow  = cell_atlas_flow,
-  subsampled_flow = no_loh_flow,
-  removed_labels  = "LOH"
-)
-
-# Quick check: how many cells still get classified as LOH across noise iters?
-for (col in 1:ncol(no_loh_flow$noised_prediction_matrix)) {
-  cat(sprintf("  iter %d: %d cells predicted as LOH\n", col - 1,
-              sum(no_loh_flow$noised_prediction_matrix[, col] == "LOH")))
+# =============================================================================
+# Helper: run or load cached flow result
+# =============================================================================
+# Saves the complete analyze_noise_impact_on_prediction() result as a single
+# RDS file. On re-run, loads instantly instead of re-running everything.
+# This is the most impactful optimization: if the script crashes mid-way,
+# already-completed removals load in seconds, not hours.
+run_or_load_flow <- function(cache_path, run_fn, label = "") {
+  if (file.exists(cache_path)) {
+    cached <- readRDS(cache_path)
+    # Validate: if cached result is missing F1 (old code), recompute
+    if (!is.null(cached$stability_pred$F1_Stability)) {
+      cat(sprintf("  [CACHE HIT] Loading %s from %s\n", label, cache_path))
+      return(cached)
+    } else {
+      cat(sprintf("  [CACHE STALE] %s missing F1_Stability — recomputing\n", label))
+      rm(cached); gc(verbose = FALSE)
+    }
+  }
+  t_start <- Sys.time()
+  cat(sprintf("  [COMPUTING] %s ...\n", label))
+  result <- run_fn()
+  t_end <- Sys.time()
+  cat(sprintf("  [DONE] %s — took %.1f min\n", label, as.numeric(difftime(t_end, t_start, units = "mins"))))
+  
+  # Ensure output directory exists
+  cache_dir <- dirname(cache_path)
+  if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
+  
+  saveRDS(result, cache_path)
+  cat(sprintf("  [SAVED] %s\n", cache_path))
+  return(result)
 }
 
 
-# ============================================================
-# Example 2: Remove multiple types from Atlas — all-in-one
-# ============================================================
+# #############################################################################
+# Section A: Atlas Subsampling
+# #############################################################################
+cat("\n\n========== SECTION A: ATLAS SUBSAMPLING ==========\n\n")
+section_a_start <- Sys.time()
 
-atlas_no_cmdiv_cm <- run_subsampling_analysis(
-  seurat_obj       = atlas_object,
-  flow_result      = cell_atlas_flow,
-  target_labels    = c("CM_DIV", "CM"),
-  keep_fraction    = 0.0,
-  train_data       = train_Six2GFP,
-  test_data        = test_Six2GFP,
-  ref_cell_type_column = "type",
-  dims             = 1:30,
-  noised_number    = 3,
-  output_prefix_base = "six2gfp/subsampling/atlas_no_CM_DIV_CM/",
-  seed             = 42,
-  train_title      = "SIX2GFP",
-  test_title_prefix = "Atlas_no_CM_DIV_CM",
-  n_neighbors      = 8,
-  skip_neighbors   = TRUE,
-  prediction_column_name = "predicted.type",
-  return_all_suerats = FALSE,
-  use_cache        = FALSE,
-  return_anchors=TRUE
-)
+# --- A1. Baseline flow with anchors ---
+# Reuse existing flow ONLY if it has both anchors AND F1 (from updated FULL_FUNCTION.R)
+has_atlas_anchors <- !is.null(cell_atlas_flow$initial_anchors)
+has_atlas_f1 <- !is.null(cell_atlas_flow$stability_pred$F1_Stability)
 
-
-# ============================================================
-# Example 3: Remove types from Uchimura
-# ============================================================
-
-# uchi_no_prox2 <- run_subsampling_analysis(
-#   seurat_obj       = seurat_Uchimura_Humphreys_20,
-#   flow_result      = Uchimura_full_flow,
-#   target_labels    = "PROX_2",
-#   keep_fraction    = 0.0,
-#   train_data       = train_Six2GFP,
-#   test_data        = test_Six2GFP,
-#   ref_cell_type_column = "type",
-#   dims             = 1:30,
-#   noised_number    = 3,
-#   output_prefix_base = "six2gfp/subsampling/uchimura_no_PROX2/",
-#   seed             = 42,
-#   train_title      = "SIX2GFP",
-#   test_title_prefix = "Uchimura_no_PROX2",
-#   n_neighbors      = 8,
-#   skip_neighbors   = TRUE,
-#   prediction_column_name = "predicted.type",
-#   return_all_suerats = FALSE,
-#   use_cache        = FALSE
-# )
-
-
-# ============================================================
-# Example 4: Remove types from Freedman
-# ============================================================
-
-# freedman_no_um <- run_subsampling_analysis(
-#   seurat_obj       = freedman_seurat_obj,
-#   flow_result      = freedman_flow,
-#   target_labels    = "UM",
-#   keep_fraction    = 0.0,
-#   train_data       = train_Six2GFP,
-#   test_data        = test_Six2GFP,
-#   ref_cell_type_column = "type",
-#   dims             = 1:15,
-#   noised_number    = 3,
-#   output_prefix_base = "six2gfp/subsampling/freedman_no_UM/",
-#   seed             = 42,
-#   train_title      = "SIX2GFP",
-#   test_title_prefix = "Freedman_no_UM",
-#   n_neighbors      = 8,
-#   skip_neighbors   = TRUE,
-#   prediction_column_name = "predicted.type",
-#   return_all_suerats = FALSE,
-#   use_cache        = FALSE
-# )
-
-
-# ============================================================
-# Example 5: Systematic removal — remove each type one-at-a-time
-# ============================================================
-
-# types_to_test <- c("UM", "CM", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO", "PODO")
-# all_comparisons <- list()
-#
-# for (type_to_remove in types_to_test) {
-#   cat(sprintf("\n\n######## Removing %s from Atlas ########\n", type_to_remove))
-#
-#   result <- run_subsampling_analysis(
-#     seurat_obj       = atlas_object,
-#     flow_result      = cell_atlas_flow,
-#     target_labels    = type_to_remove,
-#     keep_fraction    = 0.0,
-#     train_data       = train_Six2GFP,
-#     test_data        = test_Six2GFP,
-#     ref_cell_type_column = "type",
-#     dims             = 1:30,
-#     noised_number    = 3,
-#     output_prefix_base = paste0("six2gfp/subsampling/atlas_no_", type_to_remove, "/"),
-#     seed             = 42,
-#     train_title      = "SIX2GFP",
-#     test_title_prefix = paste0("Atlas_no_", type_to_remove),
-#     n_neighbors      = 8,
-#     skip_neighbors   = TRUE,
-#     prediction_column_name = "predicted.type",
-#     return_all_suerats = FALSE,
-#     use_cache        = FALSE
-#   )
-#
-#   all_comparisons[[type_to_remove]] <- result$comparison
-# }
-
-
-# ============================================================
-# Example 6: With anchor analysis (before vs after removal)
-# ============================================================
-# Run BOTH flows with return_anchors=TRUE. compare_flows() will
-# automatically detect the anchors and run compare_anchors().
-#
-# Step 1: Original flow with anchors exported
-cell_atlas_flow_anchors <- analyze_noise_impact_on_prediction(
-  atlas_object, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Kidney Cell Atlas",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/atlas_with_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
-)
-
-# Step 2: Remove LOH and run with anchors
-no_cm_cmdiv_prox1_info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, c("CM_DIV", "CM", "PROX_1"), 0.0)
-no_cm_cmdiv_prox1_flow_anchors <- analyze_noise_impact_on_prediction(
-  no_cm_cmdiv_prox1_info$seurat, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Atlas_no_cm_cmdiv_prox1",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/atlas_no_cm_cmdiv_prox1_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
-)
-
-# Step 3: compare_flows handles anchor comparison automatically!
-comparison_with_anchors <- compare_flows(
-  original_flow   = cell_atlas_flow_anchors,
-  subsampled_flow = no_cm_cmdiv_prox1_flow_anchors,
-  removed_labels  = c("CM_DIV", "CM", "PROX_1"),
-  train_data      = train_Six2GFP
-)
-# # Output includes:
-# #   - PSS/Stability comparisons (as before)
-# #   - Anchor Comparison:
-# #     - Total anchor pairs before vs after
-# #     - Anchors by reference cell type
-# #     - Query cells whose dominant anchor type changed
-# #     - Cells anchoring to the removed type's ref cells
-
-
-# ============================================================
-# Example 7: Full Atlas subsampling — multi-group removals
-# ============================================================
-# Prerequisites: cell_atlas_flow_anchors and no_cm_cmdiv_prox1_flow_anchors
-# already computed in Example 6.
-
-# --- Atlas: No LOH+CM ---
-no_loh_cm_info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, c("LOH", "CM"), 0.0)
-no_loh_cm_flow <- analyze_noise_impact_on_prediction(
-  no_loh_cm_info$seurat, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Atlas_no_LOH_CM",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/atlas_no_LOH_CM_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
-)
-comparison_no_loh_cm <- compare_flows(
-  original_flow   = cell_atlas_flow_anchors,
-  subsampled_flow = no_loh_cm_flow,
-  removed_labels  = c("LOH", "CM"),
-  train_data      = train_Six2GFP
-)
-
-
-# ============================================================
-# Example 8: Atlas — remove EACH cell type alone
-# ============================================================
-
-atlas_single_type_flows <- list()
-atlas_single_types <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO", "MACROPHAG")
-
-for (type_to_remove in atlas_single_types) {
-  cat(sprintf("\n\n######## Atlas: Removing %s ########\n", type_to_remove))
-  
-  info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, type_to_remove, 0.0)
-  flow <- analyze_noise_impact_on_prediction(
-    info$seurat, noised_number = 3,
-    train_Six2GFP, test_Six2GFP,
-    ref_cell_type_column = "type", dims = 1:30,
-    train_title = "SIX2GFP", test_title_prefix = paste0("Atlas_no_", type_to_remove),
-    n_neighbors = 8, skip_neighbors = TRUE,
-    output_prefix_base = paste0("six2gfp/subsampling/atlas_no_", type_to_remove, "_anchors/"),
-    prediction_column_name = "predicted.type",
-    use_cache = FALSE,
-    return_anchors = TRUE
+if (has_atlas_anchors && has_atlas_f1) {
+  cell_atlas_flow_anchors <- cell_atlas_flow
+  cat("  [REUSE] Using cell_atlas_flow (has anchors + F1)\n")
+} else {
+  if (!has_atlas_anchors) cat("  [INFO] cell_atlas_flow missing anchors — recomputing\n")
+  if (!has_atlas_f1) cat("  [INFO] cell_atlas_flow missing F1_Stability — recomputing\n")
+  cell_atlas_flow_anchors <- run_or_load_flow(
+    "six2gfp/subsampling/atlas_with_anchors/flow_result.rds",
+    function() {
+      analyze_noise_impact_on_prediction(
+        atlas_object, noised_number = 3,
+        train_Six2GFP, test_Six2GFP,
+        ref_cell_type_column = "type", dims = 1:30,
+        train_title = "SIX2GFP", test_title_prefix = "Kidney Cell Atlas",
+        n_neighbors = 8, skip_neighbors = TRUE,
+        output_prefix_base = "six2gfp/subsampling/atlas_with_anchors/",
+        prediction_column_name = "predicted.type",
+        use_cache = TRUE,
+        return_anchors = TRUE
+      )
+    },
+    label = "Atlas baseline"
   )
+}
+
+# --- A2. Single-type removals (loop over ALL types) ---
+atlas_single_types <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO", "MACROPHAG")
+atlas_single_type_flows <- list()
+
+for (idx in seq_along(atlas_single_types)) {
+  type_to_remove <- atlas_single_types[idx]
+  cat(sprintf("\n######## Atlas: Removing %s (%d/%d) ########\n", type_to_remove, idx, length(atlas_single_types)))
+  
+  flow_cache <- paste0("six2gfp/subsampling/atlas_no_", type_to_remove, "_anchors/flow_result.rds")
+  
+  flow <- run_or_load_flow(flow_cache, function() {
+    info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, type_to_remove, 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = paste0("Atlas_no_", type_to_remove),
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = paste0("six2gfp/subsampling/atlas_no_", type_to_remove, "_anchors/"),
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  }, label = paste0("Atlas no ", type_to_remove))
+  
   comparison <- compare_flows(
     original_flow   = cell_atlas_flow_anchors,
     subsampled_flow = flow,
@@ -282,105 +124,66 @@ for (type_to_remove in atlas_single_types) {
   )
   
   atlas_single_type_flows[[type_to_remove]] <- list(
-    info = info, flow = flow, comparison = comparison
+    flow = flow, comparison = comparison
   )
+  
+  # Memory cleanup: remove the flow copy (it's saved in the list)
+  rm(flow, comparison)
+  gc(verbose = FALSE)
 }
 
+# --- A3. Multi-group combinations ---
+cat("\n######## Atlas: Multi-group combinations ########\n")
 
-# ============================================================
-# Example 9: Uchimura subsampling
-# ============================================================
-
-# Step 1: Uchimura baseline with anchors
-Uchimura_flow_anchors <- analyze_noise_impact_on_prediction(
-  seurat_Uchimura_Humphreys_20, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Uchimura",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/uchimura_with_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
+# No CM+CM_DIV+PROX_1
+no_cm_cmdiv_prox1_flow_anchors <- run_or_load_flow(
+  "six2gfp/subsampling/atlas_no_cm_cmdiv_prox1_anchors/flow_result.rds",
+  function() {
+    info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, c("CM_DIV", "CM", "PROX_1"), 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = "Atlas_no_cm_cmdiv_prox1",
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = "six2gfp/subsampling/atlas_no_cm_cmdiv_prox1_anchors/",
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  },
+  label = "Atlas no CM+CM_DIV+PROX_1"
 )
+gc(verbose = FALSE)
 
-# --- Uchimura: No DIST_CD+LOH ---
-uchi_no_distcd_loh_info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, c("DIST_CD", "LOH"), 0.0)
-uchi_no_distcd_loh_flow <- analyze_noise_impact_on_prediction(
-  uchi_no_distcd_loh_info$seurat, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Uchimura_no_DISTCD_LOH",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/uchimura_no_DISTCD_LOH_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
+# No LOH+CM
+no_loh_cm_flow <- run_or_load_flow(
+  "six2gfp/subsampling/atlas_no_LOH_CM_anchors/flow_result.rds",
+  function() {
+    info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, c("LOH", "CM"), 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = "Atlas_no_LOH_CM",
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = "six2gfp/subsampling/atlas_no_LOH_CM_anchors/",
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  },
+  label = "Atlas no LOH+CM"
 )
-comparison_uchi_no_distcd_loh <- compare_flows(
-  original_flow   = Uchimura_flow_anchors,
-  subsampled_flow = uchi_no_distcd_loh_flow,
-  removed_labels  = c("DIST_CD", "LOH"),
-  train_data      = train_Six2GFP
-)
+gc(verbose = FALSE)
 
-# --- Uchimura: No PROX_2 ---
-uchi_no_prox2_info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, "PROX_2", 0.0)
-uchi_no_prox2_flow <- analyze_noise_impact_on_prediction(
-  uchi_no_prox2_info$seurat, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Uchimura_no_PROX2",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/uchimura_no_PROX2_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
-)
-comparison_uchi_no_prox2 <- compare_flows(
-  original_flow   = Uchimura_flow_anchors,
-  subsampled_flow = uchi_no_prox2_flow,
-  removed_labels  = "PROX_2",
-  train_data      = train_Six2GFP
-)
+cat(sprintf("\n[ATLAS] Sections A1-A3 complete — total: %.1f min\n",
+    as.numeric(difftime(Sys.time(), section_a_start, units = "mins"))))
 
-# --- Uchimura: No CM+CM_DIV ---
-uchi_no_cm_cmdiv_info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, c("CM", "CM_DIV"), 0.0)
-uchi_no_cm_cmdiv_flow <- analyze_noise_impact_on_prediction(
-  uchi_no_cm_cmdiv_info$seurat, noised_number = 3,
-  train_Six2GFP, test_Six2GFP,
-  ref_cell_type_column = "type", dims = 1:30,
-  train_title = "SIX2GFP", test_title_prefix = "Uchimura_no_CM_CMDIV",
-  n_neighbors = 8, skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/subsampling/uchimura_no_CM_CMDIV_anchors/",
-  prediction_column_name = "predicted.type",
-  use_cache = FALSE,
-  return_anchors = TRUE
-)
-comparison_uchi_no_cm_cmdiv <- compare_flows(
-  original_flow   = Uchimura_flow_anchors,
-  subsampled_flow = uchi_no_cm_cmdiv_flow,
-  removed_labels  = c("CM", "CM_DIV"),
-  train_data      = train_Six2GFP
-)
+# --- A4. Atlas plotting ---
+cat("\n######## Atlas: Plotting ########\n")
 
-
-# ============================================================
-# Example 10: Plot subsampling comparisons
-# ============================================================
-source("plot_subsampling_comparison.R")
-
-# --- Atlas: multi-group removals ---
-atlas_multigroup_plots <- plot_subsampling_comparison(
-  list(
-    "Baseline"              = cell_atlas_flow_anchors,
-    "No CM+CM_DIV+PROX_1"   = no_cm_cmdiv_prox1_flow_anchors,
-    "No LOH+CM"             = no_loh_cm_flow
-  ),
-  output_prefix = "six2gfp/subsampling/atlas_multigroup_comparison"
-)
-
-# --- Atlas: each type removed alone ---
+# Single removals
 atlas_single_results <- list("Baseline" = cell_atlas_flow_anchors)
 for (type_name in names(atlas_single_type_flows)) {
   atlas_single_results[[paste0("No ", type_name)]] <- atlas_single_type_flows[[type_name]]$flow
@@ -390,7 +193,17 @@ atlas_single_plots <- plot_subsampling_comparison(
   output_prefix = "six2gfp/subsampling/atlas_single_removal_comparison"
 )
 
-# --- Atlas: ALL removals combined ---
+# Multi-group removals
+atlas_multigroup_plots <- plot_subsampling_comparison(
+  list(
+    "Baseline"              = cell_atlas_flow_anchors,
+    "No CM+CM_DIV+PROX_1"   = no_cm_cmdiv_prox1_flow_anchors,
+    "No LOH+CM"             = no_loh_cm_flow
+  ),
+  output_prefix = "six2gfp/subsampling/atlas_multigroup_comparison"
+)
+
+# ALL removals combined
 atlas_all_results <- c(
   list(
     "Baseline"              = cell_atlas_flow_anchors,
@@ -407,21 +220,281 @@ atlas_all_plots <- plot_subsampling_comparison(
   output_prefix = "six2gfp/subsampling/atlas_all_removal_comparison"
 )
 
-# --- Uchimura ---
-uchimura_plots <- plot_subsampling_comparison(
+cat(sprintf("\n[ATLAS] Section A complete (incl. plotting) — total: %.1f min\n",
+    as.numeric(difftime(Sys.time(), section_a_start, units = "mins"))))
+
+
+# #############################################################################
+# Section B: Uchimura Subsampling
+# #############################################################################
+cat("\n\n========== SECTION B: UCHIMURA SUBSAMPLING ==========\n\n")
+section_b_start <- Sys.time()
+
+# --- B1. Baseline flow with anchors ---
+has_uchi_anchors <- !is.null(Uchimura_full_flow$initial_anchors)
+has_uchi_f1 <- !is.null(Uchimura_full_flow$stability_pred$F1_Stability)
+
+if (has_uchi_anchors && has_uchi_f1) {
+  Uchimura_flow_anchors <- Uchimura_full_flow
+  cat("  [REUSE] Using Uchimura_full_flow (has anchors + F1)\n")
+} else {
+  if (!has_uchi_anchors) cat("  [INFO] Uchimura_full_flow missing anchors — recomputing\n")
+  if (!has_uchi_f1) cat("  [INFO] Uchimura_full_flow missing F1_Stability — recomputing\n")
+  Uchimura_flow_anchors <- run_or_load_flow(
+    "six2gfp/subsampling/uchimura_with_anchors/flow_result.rds",
+    function() {
+      analyze_noise_impact_on_prediction(
+        seurat_Uchimura_Humphreys_20, noised_number = 3,
+        train_Six2GFP, test_Six2GFP,
+        ref_cell_type_column = "type", dims = 1:30,
+        train_title = "SIX2GFP", test_title_prefix = "Uchimura",
+        n_neighbors = 8, skip_neighbors = TRUE,
+        output_prefix_base = "six2gfp/subsampling/uchimura_with_anchors/",
+        prediction_column_name = "predicted.type",
+        use_cache = TRUE,
+        return_anchors = TRUE
+      )
+    },
+    label = "Uchimura baseline"
+  )
+}
+
+# --- B2. Single-type removals (loop over ALL types) ---
+uchimura_single_types <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO")
+uchimura_single_type_flows <- list()
+
+for (idx in seq_along(uchimura_single_types)) {
+  type_to_remove <- uchimura_single_types[idx]
+  cat(sprintf("\n######## Uchimura: Removing %s (%d/%d) ########\n", type_to_remove, idx, length(uchimura_single_types)))
+  
+  flow_cache <- paste0("six2gfp/subsampling/uchimura_no_", type_to_remove, "_anchors/flow_result.rds")
+  
+  flow <- run_or_load_flow(flow_cache, function() {
+    info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, type_to_remove, 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = paste0("uchimura_no_", type_to_remove),
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = paste0("six2gfp/subsampling/uchimura_no_", type_to_remove, "_anchors/"),
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  }, label = paste0("Uchimura no ", type_to_remove))
+  
+  comparison <- compare_flows(
+    original_flow   = Uchimura_flow_anchors,
+    subsampled_flow = flow,
+    removed_labels  = type_to_remove,
+    train_data      = train_Six2GFP
+  )
+  
+  uchimura_single_type_flows[[type_to_remove]] <- list(
+    flow = flow, comparison = comparison
+  )
+  
+  rm(flow, comparison)
+  gc(verbose = FALSE)
+}
+
+# --- B3. Multi-group combinations ---
+cat("\n######## Uchimura: Multi-group combinations ########\n")
+
+# No DIST_CD+LOH
+uchi_no_distcd_loh_flow <- run_or_load_flow(
+  "six2gfp/subsampling/uchimura_no_DISTCD_LOH_anchors/flow_result.rds",
+  function() {
+    info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, c("DIST_CD", "LOH"), 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = "Uchimura_no_DISTCD_LOH",
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = "six2gfp/subsampling/uchimura_no_DISTCD_LOH_anchors/",
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  },
+  label = "Uchimura no DIST_CD+LOH"
+)
+gc(verbose = FALSE)
+
+# No CM+CM_DIV
+uchi_no_cm_cmdiv_flow <- run_or_load_flow(
+  "six2gfp/subsampling/uchimura_no_CM_CMDIV_anchors/flow_result.rds",
+  function() {
+    info <- create_subsampled_seurat(seurat_Uchimura_Humphreys_20, Uchimura_flow_anchors, c("CM", "CM_DIV"), 0.0)
+    analyze_noise_impact_on_prediction(
+      info$seurat, noised_number = 3,
+      train_Six2GFP, test_Six2GFP,
+      ref_cell_type_column = "type", dims = 1:30,
+      train_title = "SIX2GFP", test_title_prefix = "Uchimura_no_CM_CMDIV",
+      n_neighbors = 8, skip_neighbors = TRUE,
+      output_prefix_base = "six2gfp/subsampling/uchimura_no_CM_CMDIV_anchors/",
+      prediction_column_name = "predicted.type",
+      use_cache = TRUE,
+      return_anchors = TRUE
+    )
+  },
+  label = "Uchimura no CM+CM_DIV"
+)
+gc(verbose = FALSE)
+
+cat(sprintf("\n[UCHIMURA] Sections B1-B3 complete — total: %.1f min\n",
+    as.numeric(difftime(Sys.time(), section_b_start, units = "mins"))))
+
+# --- B4. Uchimura plotting ---
+cat("\n######## Uchimura: Plotting ########\n")
+
+# Single removals
+uchimura_single_results <- list("Baseline" = Uchimura_flow_anchors)
+for (type_name in names(uchimura_single_type_flows)) {
+  uchimura_single_results[[paste0("No ", type_name)]] <- uchimura_single_type_flows[[type_name]]$flow
+}
+uchimura_single_plots <- plot_subsampling_comparison(
+  uchimura_single_results,
+  output_prefix = "six2gfp/subsampling/uchimura_single_removal_comparison"
+)
+
+# Multi-group removals
+uchimura_multigroup_plots <- plot_subsampling_comparison(
   list(
     "Baseline"        = Uchimura_flow_anchors,
     "No DIST_CD+LOH"  = uchi_no_distcd_loh_flow,
-    "No PROX_2"       = uchi_no_prox2_flow,
     "No CM+CM_DIV"    = uchi_no_cm_cmdiv_flow
   ),
-  output_prefix = "six2gfp/subsampling/uchimura_removal_comparison"
+  output_prefix = "six2gfp/subsampling/uchimura_multigroup_comparison"
 )
 
-# create braplot for each flavor 
+# ALL removals combined
+uchimura_all_results <- c(
+  list(
+    "Baseline"        = Uchimura_flow_anchors,
+    "No DIST_CD+LOH"  = uchi_no_distcd_loh_flow,
+    "No CM+CM_DIV"    = uchi_no_cm_cmdiv_flow
+  ),
+  setNames(
+    lapply(names(uchimura_single_type_flows), function(t) uchimura_single_type_flows[[t]]$flow),
+    paste0("No ", names(uchimura_single_type_flows))
+  )
+)
+uchimura_all_plots <- plot_subsampling_comparison(
+  uchimura_all_results,
+  output_prefix = "six2gfp/subsampling/uchimura_all_removal_comparison"
+)
 
-# Atlas - CM+CM_DIV+PROX_1, LOH+CM, EACH celltype alone
-# Uchimura - DICT_CD+LOH, PROX_2, CM+CM_DIV
-# another try: calculate stability not only as what got out after noise - but also 
-# what came in. 1-([out+in]/original) 
-# dont remove old calculation, only add this
+cat(sprintf("\n[UCHIMURA] Section B complete (incl. plotting) — total: %.1f min\n",
+    as.numeric(difftime(Sys.time(), section_b_start, units = "mins"))))
+
+
+# #############################################################################
+# Section C: Freedman Subsampling (commented out)
+# #############################################################################
+
+# # --- C1. Baseline flow with anchors ---
+# if (is.null(freedman_flow$initial_anchors)) {
+#   freedman_flow_anchors <- run_or_load_flow(
+#     "six2gfp/subsampling/freedman_with_anchors/flow_result.rds",
+#     function() {
+#       analyze_noise_impact_on_prediction(
+#         freedman_seurat_obj, noised_number = 3,
+#         train_Six2GFP, test_Six2GFP,
+#         ref_cell_type_column = "type", dims = 1:15,
+#         train_title = "SIX2GFP", test_title_prefix = "Freedman",
+#         n_neighbors = 8, skip_neighbors = TRUE,
+#         output_prefix_base = "six2gfp/subsampling/freedman_with_anchors/",
+#         prediction_column_name = "predicted.type",
+#         use_cache = TRUE,
+#         return_anchors = TRUE
+#       )
+#     },
+#     label = "Freedman baseline"
+#   )
+# } else {
+#   freedman_flow_anchors <- freedman_flow
+# }
+#
+# # --- C2. Single-type removals (loop over ALL types) ---
+# freedman_single_types <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO")
+# freedman_single_type_flows <- list()
+#
+# for (idx in seq_along(freedman_single_types)) {
+#   type_to_remove <- freedman_single_types[idx]
+#   cat(sprintf("\n######## Freedman: Removing %s (%d/%d) ########\n", type_to_remove, idx, length(freedman_single_types)))
+#   
+#   flow_cache <- paste0("six2gfp/subsampling/freedman_no_", type_to_remove, "_anchors/flow_result.rds")
+#   
+#   flow <- run_or_load_flow(flow_cache, function() {
+#     info <- create_subsampled_seurat(freedman_seurat_obj, freedman_flow_anchors, type_to_remove, 0.0)
+#     analyze_noise_impact_on_prediction(
+#       info$seurat, noised_number = 3,
+#       train_Six2GFP, test_Six2GFP,
+#       ref_cell_type_column = "type", dims = 1:15,
+#       train_title = "SIX2GFP", test_title_prefix = paste0("Freedman_no_", type_to_remove),
+#       n_neighbors = 8, skip_neighbors = TRUE,
+#       output_prefix_base = paste0("six2gfp/subsampling/freedman_no_", type_to_remove, "_anchors/"),
+#       prediction_column_name = "predicted.type",
+#       use_cache = TRUE,
+#       return_anchors = TRUE
+#     )
+#   }, label = paste0("Freedman no ", type_to_remove))
+#   
+#   comparison <- compare_flows(
+#     original_flow   = freedman_flow_anchors,
+#     subsampled_flow = flow,
+#     removed_labels  = type_to_remove,
+#     train_data      = train_Six2GFP
+#   )
+#   
+#   freedman_single_type_flows[[type_to_remove]] <- list(
+#     flow = flow, comparison = comparison
+#   )
+#   
+#   rm(flow, comparison)
+#   gc(verbose = FALSE)
+# }
+#
+# # --- C3. Multi-group combinations (add as needed) ---
+# # (No specific combinations for Freedman yet)
+#
+# # --- C4. Freedman plotting ---
+# freedman_single_results <- list("Baseline" = freedman_flow_anchors)
+# for (type_name in names(freedman_single_type_flows)) {
+#   freedman_single_results[[paste0("No ", type_name)]] <- freedman_single_type_flows[[type_name]]$flow
+# }
+# freedman_single_plots <- plot_subsampling_comparison(
+#   freedman_single_results,
+#   output_prefix = "six2gfp/subsampling/freedman_single_removal_comparison"
+# )
+# freedman_all_plots <- plot_subsampling_comparison(
+#   freedman_single_results,
+#   output_prefix = "six2gfp/subsampling/freedman_all_removal_comparison"
+# )
+
+
+# =============================================================================
+# Notes on Performance and Caching:
+# =============================================================================
+# 1. TOP-LEVEL CACHING: Each analyze_noise_impact_on_prediction() result is
+#    saved as flow_result.rds in its output directory. On re-run, this loads
+#    instantly instead of recomputing. If the script crashes, already-completed
+#    removals are NOT recomputed.
+#
+# 2. INNER CACHING: use_cache = TRUE caches intermediate Seurat objects
+#    (training data, test queries, no-noise run). These help when the flow
+#    needs to actually run, but the top-level cache skips everything.
+#
+# 3. MEMORY CLEANUP: gc() is called after each removal to free memory.
+#    With 26GB RAM + 15GB swap, this prevents OOM crashes.
+#
+# 4. TO FORCE RECOMPUTATION: Delete the flow_result.rds file for the
+#    specific removal you want to recompute.
+#
+# Stability metrics computed:
+#   - Stability:    diagonal of confusion matrix (recall / outflow only)
+#   - Bi_Stability: 1 - (out + in) / original (penalizes both outflow & inflow)
+#   - F1_Stability: 2TP / (2TP + FP + FN) (harmonic mean of precision & recall)

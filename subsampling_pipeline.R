@@ -651,7 +651,15 @@ run_subsampling_analysis <- function(seurat_obj,
                                      noised_number = 1,
                                      output_prefix_base = "six2gfp/subsampling/",
                                      seed = 42,
+                                     save_rds = TRUE,
                                      ...) {
+  
+  # If cache file exists, load it directly to save time (especially after reboot)
+  rds_file <- paste0(output_prefix_base, "subsampling_result.rds")
+  if (save_rds && file.exists(rds_file)) {
+    cat(sprintf("\n========== Loading cached result from %s ==========\n", rds_file))
+    return(readRDS(rds_file))
+  }
   
   # Step 1: Create subsampled Seurat
   cat("\n========== Step 1: Subsampling ==========\n")
@@ -685,9 +693,16 @@ run_subsampling_analysis <- function(seurat_obj,
     output_file = paste0(output_prefix_base, "comparison")
   )
   
-  return(list(
+  final_result <- list(
     subsample_info = subsample_info,
     flow = subsampled_flow,
     comparison = comparison
-  ))
+  )
+  
+  if (save_rds) {
+    saveRDS(final_result, rds_file)
+    cat(sprintf("\nSaved full subsampling result to %s\n", rds_file))
+  }
+  
+  return(final_result)
 }

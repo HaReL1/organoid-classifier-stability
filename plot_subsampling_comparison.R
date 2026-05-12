@@ -2,6 +2,7 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(ggrepel)
+library(patchwork)
 
 #' Plot Subsampling Comparison Across Multiple Removal Groups
 #' 
@@ -93,6 +94,11 @@ plot_subsampling_comparison <- function(
     } else {
       rep(NA, length(cell_types))  # backward compat with old flow results
     }
+    f1_stability_values <- if (!is.null(run_result$stability_pred$F1_Stability)) {
+      run_result$stability_pred$F1_Stability
+    } else {
+      rep(NA, length(cell_types))  # backward compat with old flow results
+    }
     
     # Try to extract cell counts from noised_prediction_matrix
     cell_counts <- rep(NA, length(cell_types))
@@ -115,6 +121,8 @@ plot_subsampling_comparison <- function(
     stability_mean_values <- stability_values  # default: use single-run values
     bi_stability_sd_values <- rep(NA, length(cell_types))
     bi_stability_mean_values <- bi_stability_values
+    f1_stability_sd_values <- rep(NA, length(cell_types))
+    f1_stability_mean_values <- f1_stability_values
     
     if (!is.null(run_result$stability_per_run) && ncol(run_result$stability_per_run) > 1) {
       for (i in seq_along(cell_types)) {
@@ -135,6 +143,15 @@ plot_subsampling_comparison <- function(
         }
       }
     }
+    if (!is.null(run_result$f1_stability_per_run) && ncol(run_result$f1_stability_per_run) > 1) {
+      for (i in seq_along(cell_types)) {
+        if (cell_types[i] %in% rownames(run_result$f1_stability_per_run)) {
+          per_run_vals <- run_result$f1_stability_per_run[cell_types[i], ]
+          f1_stability_mean_values[i] <- mean(per_run_vals, na.rm = TRUE)
+          f1_stability_sd_values[i] <- sd(per_run_vals, na.rm = TRUE)
+        }
+      }
+    }
     
     # Create data frame for this run
     run_data <- data.frame(
@@ -144,6 +161,8 @@ plot_subsampling_comparison <- function(
       stability_sd = stability_sd_values,
       bi_stability = bi_stability_mean_values,
       bi_stability_sd = bi_stability_sd_values,
+      f1_stability = f1_stability_mean_values,
+      f1_stability_sd = f1_stability_sd_values,
       removed_group = run_name,
       n_cells = cell_counts,
       stringsAsFactors = FALSE
@@ -183,7 +202,8 @@ plot_subsampling_comparison <- function(
   combined_data <- combined_data %>%
       complete(cell_type, removed_group, 
                fill = list(pss = 0, stability = 0, stability_sd = 0,
-                           bi_stability = 0, bi_stability_sd = 0, n_cells = 0))
+                           bi_stability = 0, bi_stability_sd = 0,
+                           f1_stability = 0, f1_stability_sd = 0, n_cells = 0))
   
   # Define colors for different removal groups
   num_groups <- length(unique(combined_data$removed_group))
@@ -308,6 +328,49 @@ plot_subsampling_comparison <- function(
     message("Bi_Stability not available in flow results (re-run with updated FULL_FUNCTION.R)")
   }
   
+  # ===== Plot 3b: F1 Stability comparison =====
+  has_f1_stability <- any(!is.na(combined_data$f1_stability) & combined_data$f1_stability != 0)
+  has_f1_error_bars <- any(!is.na(combined_data$f1_stability_sd))
+  
+  if (has_f1_stability) {
+    plot_f1_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = f1_stability, fill = removed_group)) +
+      geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+      geom_text(aes(label = ifelse(!is.na(n_cells) & n_cells > 0, paste0("n=", n_cells), ""), y = 0), 
+                position = position_dodge(width = 0.8), 
+                vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
+      { if (has_f1_error_bars) 
+          geom_errorbar(aes(ymin = f1_stability - f1_stability_sd, ymax = f1_stability + f1_stability_sd),
+                        position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+      } +
+      scale_fill_manual(values = group_colors, name = "Removed Group") +
+      labs(
+        title = "F1 Stability: Effect of Group Removal",
+        subtitle = "Harmonic mean of precision and recall: 2TP/(2TP+FP+FN)",
+        x = "Cell Type",
+        y = "F1 Stability"
+      ) +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 13, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 13),
+        plot.title = element_text(size = 15, face = "bold")
+      )
+    
+    ggsave(
+      paste0(output_prefix, "_f1_stability_by_celltype_comparison.svg"),
+      plot = plot_f1_stability_comparison,
+      width = 12, height = 8, units = "in"
+    )
+  } else {
+    plot_f1_stability_comparison <- NULL
+    message("F1_Stability not available in flow results (re-run with updated FULL_FUNCTION.R)")
+  }
+  
   # ===== Plot 4: Per-run stability barplots =====
   max_runs <- 0
   for (run_name in names(run_results_list)) {
@@ -379,6 +442,10 @@ plot_subsampling_comparison <- function(
       sd_pss = sd(pss, na.rm = TRUE),
       mean_stability = mean(stability, na.rm = TRUE),
       sd_stability = sd(stability, na.rm = TRUE),
+      mean_bi_stability = mean(bi_stability, na.rm = TRUE),
+      sd_bi_stability = sd(bi_stability, na.rm = TRUE),
+      mean_f1_stability = mean(f1_stability, na.rm = TRUE),
+      sd_f1_stability = sd(f1_stability, na.rm = TRUE),
       .groups = "drop"
     )
   print(summary_stats)
@@ -434,7 +501,7 @@ plot_subsampling_comparison <- function(
     baseline_data <- combined_data %>% 
       filter(removed_group == baseline_name) %>%
       select(cell_type, pss_baseline = pss, stability_baseline = stability,
-             bi_stability_baseline = bi_stability)
+             bi_stability_baseline = bi_stability, f1_stability_baseline = f1_stability)
     
     delta_data <- combined_data %>%
       filter(removed_group != baseline_name) %>%
@@ -442,7 +509,8 @@ plot_subsampling_comparison <- function(
       mutate(
         pss_delta = pss - pss_baseline,
         stability_delta = stability - stability_baseline,
-        bi_stability_delta = bi_stability - bi_stability_baseline
+        bi_stability_delta = bi_stability - bi_stability_baseline,
+        f1_stability_delta = f1_stability - f1_stability_baseline
       )
     
     # PSS delta plot
@@ -535,10 +603,144 @@ plot_subsampling_comparison <- function(
     } else {
       plot_bi_stability_delta <- NULL
     }
+    
+    # F1-Stability delta plot
+    if (has_f1_stability) {
+      plot_f1_stability_delta <- ggplot(delta_data, aes(x = cell_type, y = f1_stability_delta, fill = removed_group)) +
+        geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+        scale_fill_manual(values = group_colors[names(group_colors) != baseline_name], 
+                          name = "Removed Group") +
+        labs(
+          title = paste0("F1-Stability Change vs Baseline (", baseline_name, ")"),
+          x = "Cell Type",
+          y = "ΔF1-Stability (removal − baseline)"
+        ) +
+        theme_minimal() +
+        theme(
+          legend.position = "bottom",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13, face = "bold"),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          plot.title = element_text(size = 15, face = "bold")
+        )
+      
+      ggsave(
+        paste0(output_prefix, "_f1_stability_delta_vs_baseline.svg"),
+        plot = plot_f1_stability_delta,
+        width = 12, height = 8, units = "in"
+      )
+    } else {
+      plot_f1_stability_delta <- NULL
+    }
+    
+    # ===== Paired Barplots: Baseline (top) vs Removal (bottom) =====
+    # For each individual removal, create a 2-panel plot per metric
+    # showing baseline on top and removal on bottom, so the delta is visible
+    
+    paired_barplot_list <- list()
+    paired_barplot_dir <- paste0(output_prefix, "_paired_barplots/")
+    if (!dir.exists(paired_barplot_dir)) {
+      dir.create(paired_barplot_dir, recursive = TRUE)
+    }
+    
+    removal_names <- setdiff(names(run_results_list), baseline_name)
+    
+    # Define which metrics to plot
+    metric_configs <- list(
+      list(col = "stability",    sd_col = "stability_sd",    label = "Stability",    title_prefix = "Stability"),
+      list(col = "bi_stability", sd_col = "bi_stability_sd", label = "Bi-Stability", title_prefix = "Bi-Stability"),
+      list(col = "f1_stability", sd_col = "f1_stability_sd", label = "F1 Stability", title_prefix = "F1 Stability")
+    )
+    
+    all_paired_plots <- list()  # for PDF
+    
+    for (removal_name in removal_names) {
+      # Filter data for just baseline and this removal
+      pair_data <- combined_data %>%
+        filter(removed_group %in% c(baseline_name, removal_name))
+      pair_data$removed_group <- factor(pair_data$removed_group, 
+                                         levels = c(baseline_name, removal_name))
+      
+      # Clean name for filenames
+      clean_name <- gsub("[^A-Za-z0-9_]", "_", removal_name)
+      
+      for (mc in metric_configs) {
+        # Check if this metric has data
+        metric_vals <- pair_data[[mc$col]]
+        if (all(is.na(metric_vals) | metric_vals == 0)) next
+        
+        has_sd <- any(!is.na(pair_data[[mc$sd_col]]))
+        
+        # Top panel: baseline only
+        baseline_panel_data <- pair_data %>% filter(removed_group == baseline_name)
+        removal_panel_data <- pair_data %>% filter(removed_group == removal_name)
+        
+        common_theme <- theme_minimal() +
+          theme(
+            axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+            axis.text.y = element_text(size = 12),
+            axis.title = element_text(size = 13),
+            plot.title = element_text(size = 14, face = "bold"),
+            legend.position = "none"
+          )
+        
+        p_top <- ggplot(baseline_panel_data, aes(x = cell_type, y = .data[[mc$col]])) +
+          geom_bar(stat = "identity", fill = group_colors[baseline_name], alpha = 0.8) +
+          { if (has_sd) 
+              geom_errorbar(aes(ymin = .data[[mc$col]] - .data[[mc$sd_col]], 
+                                ymax = .data[[mc$col]] + .data[[mc$sd_col]]),
+                            width = 0.25, linewidth = 0.4)
+          } +
+          scale_y_continuous(limits = c(0, 1)) +
+          labs(title = paste0(mc$title_prefix, ": ", baseline_name),
+               x = NULL, y = mc$label) +
+          common_theme
+        
+        p_bottom <- ggplot(removal_panel_data, aes(x = cell_type, y = .data[[mc$col]])) +
+          geom_bar(stat = "identity", fill = group_colors[removal_name], alpha = 0.8) +
+          { if (has_sd) 
+              geom_errorbar(aes(ymin = .data[[mc$col]] - .data[[mc$sd_col]], 
+                                ymax = .data[[mc$col]] + .data[[mc$sd_col]]),
+                            width = 0.25, linewidth = 0.4)
+          } +
+          scale_y_continuous(limits = c(0, 1)) +
+          labs(title = paste0(mc$title_prefix, ": ", removal_name),
+               x = "Cell Type", y = mc$label) +
+          common_theme
+        
+        # Stack vertically
+        paired_plot <- p_top / p_bottom
+        
+        plot_filename <- paste0(paired_barplot_dir, clean_name, "_", mc$col, "_paired.svg")
+        ggsave(plot_filename, plot = paired_plot, width = 10, height = 10, units = "in")
+        
+        key <- paste0(removal_name, "_", mc$col)
+        paired_barplot_list[[key]] <- paired_plot
+        all_paired_plots[[length(all_paired_plots) + 1]] <- paired_plot
+      }
+    }
+    
+    # Save combined PDF with all paired barplots
+    if (length(all_paired_plots) > 0) {
+      pdf_file <- paste0(output_prefix, "_paired_barplots_all.pdf")
+      pdf(pdf_file, width = 10, height = 10)
+      for (p in all_paired_plots) {
+        print(p)
+      }
+      dev.off()
+      message(paste0("Saved combined paired barplots PDF: ", pdf_file))
+    }
+    
   } else {
     plot_pss_delta <- NULL
     plot_stability_delta <- NULL
     plot_bi_stability_delta <- NULL
+    plot_f1_stability_delta <- NULL
+    paired_barplot_list <- list()
     delta_data <- NULL
   }
   
@@ -547,9 +749,12 @@ plot_subsampling_comparison <- function(
     plot_pss_comparison = plot_pss_comparison,
     plot_stability_comparison = plot_stability_comparison,
     plot_bi_stability_comparison = plot_bi_stability_comparison,
+    plot_f1_stability_comparison = if (exists("plot_f1_stability_comparison")) plot_f1_stability_comparison else NULL,
     plot_pss_delta = plot_pss_delta,
     plot_stability_delta = plot_stability_delta,
     plot_bi_stability_delta = if (exists("plot_bi_stability_delta")) plot_bi_stability_delta else NULL,
+    plot_f1_stability_delta = if (exists("plot_f1_stability_delta")) plot_f1_stability_delta else NULL,
+    paired_barplots = if (exists("paired_barplot_list")) paired_barplot_list else list(),
     per_run_plots = per_run_plots,
     combined_data = combined_data,
     delta_data = delta_data,

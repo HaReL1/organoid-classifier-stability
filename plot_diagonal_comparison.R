@@ -87,6 +87,11 @@ plot_diagonal_comparison <- function(
     } else {
       rep(NA, length(cell_types))  # backward compat with old flow results
     }
+    f1_stability_values <- if (!is.null(run_result$stability_pred$F1_Stability)) {
+      run_result$stability_pred$F1_Stability
+    } else {
+      rep(NA, length(cell_types))  # backward compat with old flow results
+    }
     
     # DEBUG: Print available fields to understand why counts are missing
     print(paste("Analyzing", run_name, "- Available fields:"))
@@ -128,6 +133,8 @@ plot_diagonal_comparison <- function(
     stability_mean_values <- stability_values  # default: use single-run values
     bi_stability_sd_values <- rep(NA, length(cell_types))
     bi_stability_mean_values <- bi_stability_values
+    f1_stability_sd_values <- rep(NA, length(cell_types))
+    f1_stability_mean_values <- f1_stability_values
     
     if (!is.null(run_result$stability_per_run) && ncol(run_result$stability_per_run) > 1) {
       for (i in seq_along(cell_types)) {
@@ -148,8 +155,16 @@ plot_diagonal_comparison <- function(
         }
       }
     }
+    if (!is.null(run_result$f1_stability_per_run) && ncol(run_result$f1_stability_per_run) > 1) {
+      for (i in seq_along(cell_types)) {
+        if (cell_types[i] %in% rownames(run_result$f1_stability_per_run)) {
+          per_run_vals <- run_result$f1_stability_per_run[cell_types[i], ]
+          f1_stability_mean_values[i] <- mean(per_run_vals, na.rm = TRUE)
+          f1_stability_sd_values[i] <- sd(per_run_vals, na.rm = TRUE)
+        }
+      }
+    }
     
-    # Create data frame for this run
     run_data <- data.frame(
       cell_type = cell_types,
       pss = pss_values,
@@ -157,6 +172,8 @@ plot_diagonal_comparison <- function(
       stability_sd = stability_sd_values,
       bi_stability = bi_stability_mean_values,
       bi_stability_sd = bi_stability_sd_values,
+      f1_stability = f1_stability_mean_values,
+      f1_stability_sd = f1_stability_sd_values,
       dataset = run_name,
       n_cells = cell_counts,
       stringsAsFactors = FALSE
@@ -309,6 +326,48 @@ plot_diagonal_comparison <- function(
     plot_bi_stability_comparison <- NULL
   }
   
+  # ===== Plot 3a-ter: F1 Stability comparison =====
+  has_f1_stability <- any(!is.na(combined_data$f1_stability))
+  has_f1_error_bars <- any(!is.na(combined_data$f1_stability_sd))
+  
+  if (has_f1_stability) {
+    plot_f1_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = f1_stability, fill = dataset)) +
+      geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+      geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
+                position = position_dodge(width = 0.8), 
+                vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
+      { if (has_f1_error_bars) 
+          geom_errorbar(aes(ymin = f1_stability - f1_stability_sd, ymax = f1_stability + f1_stability_sd),
+                        position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+      } +
+      scale_fill_manual(values = dataset_colors, name = "Dataset") +
+      labs(
+        title = "F1 Stability by Cell Type Across Datasets",
+        subtitle = "Harmonic mean of precision and recall: 2TP/(2TP+FP+FN)",
+        x = "Cell Type",
+        y = "F1 Stability"
+      ) +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 13, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 13),
+        plot.title = element_text(size = 15, face = "bold")
+      )
+    
+    ggsave(
+      paste0(output_prefix, "_f1_stability_by_celltype_comparison.svg"),
+      plot = plot_f1_stability_comparison,
+      width = 12, height = 8, units = "in"
+    )
+  } else {
+    plot_f1_stability_comparison <- NULL
+  }
+  
   # ===== Plot 3b: Per-run stability barplots =====
   # Determine how many runs we have (take max across datasets)
   max_runs <- 0
@@ -379,6 +438,10 @@ plot_diagonal_comparison <- function(
       sd_pss = sd(pss, na.rm = TRUE),
       mean_stability = mean(stability, na.rm = TRUE),
       sd_stability = sd(stability, na.rm = TRUE),
+      mean_bi_stability = mean(bi_stability, na.rm = TRUE),
+      sd_bi_stability = sd(bi_stability, na.rm = TRUE),
+      mean_f1_stability = mean(f1_stability, na.rm = TRUE),
+      sd_f1_stability = sd(f1_stability, na.rm = TRUE),
       .groups = "drop"
     )
   print(summary_stats)
@@ -431,6 +494,8 @@ plot_diagonal_comparison <- function(
   return(list(
     plot_pss_comparison = plot_pss_comparison,
     plot_stability_comparison = plot_stability_comparison,
+    plot_bi_stability_comparison = plot_bi_stability_comparison,
+    plot_f1_stability_comparison = if (exists("plot_f1_stability_comparison")) plot_f1_stability_comparison else NULL,
     combined_data = combined_data,
     summary_stats = summary_stats,
     stability_ranking = stability_ranking

@@ -482,10 +482,10 @@ analyze_noise_impact_on_prediction <- function(
   }
   
   second_process_file <- paste0(cache_dir, "run_without_noise.rds")
-  # if (use_cache && file.exists(second_process_file)) {
-  #   print("Loading cached 'without noise' data...")
-  #   temp_seurat_obj <- readRDS(second_process_file)
-  # } else {
+  if (use_cache && file.exists(second_process_file)) {
+    print("Loading cached 'without noise' data...")
+    temp_seurat_obj <- readRDS(second_process_file)
+  } else {
     print("Run once without noise...")
     temp_seurat_obj <- process_seurat_data_iter(
       labeled_train_data = train_Six2GFP,
@@ -507,7 +507,7 @@ analyze_noise_impact_on_prediction <- function(
       print("Caching without noise run...")
       saveRDS(temp_seurat_obj, second_process_file)
     }
-  # }
+  }
   # initial_test_query = temp_seurat_obj[["test"]] # save initial test_query object
   main_cell_type_order <- temp_seurat_obj[["cell_type_order"]] # Capture cell_type_order
   
@@ -934,8 +934,8 @@ analyze_noise_impact_on_prediction <- function(
   
   print(paste0("running on types:[",paste(types_to_run_on,sep =","),"]"))
   stability_pred = matrix(0, nrow = length(types_to_run_on),
-                          ncol = 3,
-                          dimnames = list(types_to_run_on,c("PSS","Stability","Bi_Stability")))
+                          ncol = 4,
+                          dimnames = list(types_to_run_on,c("PSS","Stability","Bi_Stability","F1_Stability")))
   stability_pred = as.data.frame(stability_pred)
   for (i in seq_along(types_to_run_on)){
     type = types_to_run_on[i]
@@ -953,12 +953,22 @@ analyze_noise_impact_on_prediction <- function(
     out_count <- original_count - stayed
     in_count <- noised_count - stayed
     stability_pred[i,3] = max(0, 1 - (out_count + in_count) / original_count)
+    
+    # F1 Stability: harmonic mean of precision and recall
+    # TP = stayed (diagonal), FP = in_count (inflow), FN = out_count (outflow)
+    # F1 = 2*TP / (2*TP + FP + FN)
+    tp <- stayed
+    fp <- in_count
+    fn <- out_count
+    stability_pred[i,4] = if ((2*tp + fp + fn) > 0) (2*tp) / (2*tp + fp + fn) else 0
   }
   
   # 10.1 Per-run stability (for variability / error bars) ####
   stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
                               dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
   bi_stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
+                                  dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
+  f1_stability_per_run <- matrix(NA, nrow = length(types_to_run_on), ncol = noised_number,
                                   dimnames = list(types_to_run_on, paste0("run_", 1:noised_number)))
   for (run_idx in 1:noised_number) {
     run_conf <- table(Original = noised_prediction[, 1],
@@ -977,6 +987,11 @@ analyze_noise_impact_on_prediction <- function(
         out_run <- original_run - stayed_run
         in_run <- noised_run - stayed_run
         bi_stability_per_run[type, run_idx] <- max(0, 1 - (out_run + in_run) / original_run)
+        # F1 stability per run: 2*TP / (2*TP + FP + FN)
+        tp_run <- stayed_run
+        fp_run <- in_run
+        fn_run <- out_run
+        f1_stability_per_run[type, run_idx] <- if ((2*tp_run + fp_run + fn_run) > 0) (2*tp_run) / (2*tp_run + fp_run + fn_run) else 0
       }
     }
   }
@@ -985,6 +1000,18 @@ analyze_noise_impact_on_prediction <- function(
     ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
   
   ggsave(paste0(output_prefix_base, "stability_vs_pss_scatter_plot.svg"), plot = stability_plot,
+         width = 12, height = 9, units = "in")
+
+  bi_stability_plot = ggplot(stability_pred, aes(x=PSS, y=Bi_Stability)) + geom_point() + theme_minimal() +
+    ggtitle("Bidirectional Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
+  
+  ggsave(paste0(output_prefix_base, "bi_stability_vs_pss_scatter_plot.svg"), plot = bi_stability_plot,
+         width = 12, height = 9, units = "in")
+
+  f1_stability_plot = ggplot(stability_pred, aes(x=PSS, y=F1_Stability)) + geom_point() + theme_minimal() +
+    ggtitle("F1 Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
+  
+  ggsave(paste0(output_prefix_base, "f1_stability_vs_pss_scatter_plot.svg"), plot = f1_stability_plot,
          width = 12, height = 9, units = "in")
   
   # plot also the full table
@@ -1124,7 +1151,9 @@ analyze_noise_impact_on_prediction <- function(
                     "all_freq_vs_pss_scatter_plot_with_fit.svg",
                     "change_proportion_plot.svg",
                     "confusion_matrix.svg",
-                    "pss_heatmap.svg")
+                    "pss_heatmap.svg",
+                    "bi_stability_vs_pss_scatter_plot.svg",
+                    "f1_stability_vs_pss_scatter_plot.svg")
   moved_files <- character(0)
   failed_files <- character(0)
   
@@ -1161,6 +1190,7 @@ analyze_noise_impact_on_prediction <- function(
     stability_pred = stability_pred,
     stability_per_run = stability_per_run,
     bi_stability_per_run = bi_stability_per_run,
+    f1_stability_per_run = f1_stability_per_run,
     seurat_noised_prediction_list = seurat_noised_prediction_list,
     initial_anchors = temp_seurat_obj$test_anchors,
     noised_anchors = noised_anchors_list
