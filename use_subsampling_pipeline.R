@@ -27,12 +27,15 @@ source("plot_subsampling_comparison.R")
 # RDS file. On re-run, loads instantly instead of re-running everything.
 # This is the most impactful optimization: if the script crashes mid-way,
 # already-completed removals load in seconds, not hours.
-run_or_load_flow <- function(cache_path, run_fn, label = "") {
+run_or_load_flow <- function(cache_path, run_fn, label = "", force_replot = FALSE) {
   if (file.exists(cache_path)) {
     cached <- readRDS(cache_path)
     # Validate: if cached result is missing F1 (old code), recompute
     if (!is.null(cached$stability_pred$F1_Stability)) {
       cat(sprintf("  [CACHE HIT] Loading %s from %s\n", label, cache_path))
+      if (force_replot) {
+        regenerate_plots_from_cache(cache_path)
+      }
       return(cached)
     } else {
       cat(sprintf("  [CACHE STALE] %s missing F1_Stability — recomputing\n", label))

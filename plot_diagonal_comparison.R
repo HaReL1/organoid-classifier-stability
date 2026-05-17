@@ -32,7 +32,8 @@ plot_diagonal_comparison <- function(
     run_results_list,
     output_prefix = "diagonal_comparison",
     plot_title_pss = "PSS Self-Similarity Across Datasets",
-    plot_title_stability = "Stability Across Datasets"
+    plot_title_stability = "Stability Across Datasets",
+    n_runs_override = NULL  # optionally force n_runs label (auto-detected if NULL)
 ) {
   
   # Validate input
@@ -136,6 +137,9 @@ plot_diagonal_comparison <- function(
     f1_stability_sd_values <- rep(NA, length(cell_types))
     f1_stability_mean_values <- f1_stability_values
     
+    # Detect noised_number for this dataset from the per-run table
+    dataset_n_runs <- if (!is.null(run_result$stability_per_run)) ncol(run_result$stability_per_run) else NA
+    
     if (!is.null(run_result$stability_per_run) && ncol(run_result$stability_per_run) > 1) {
       for (i in seq_along(cell_types)) {
         if (cell_types[i] %in% rownames(run_result$stability_per_run)) {
@@ -176,6 +180,7 @@ plot_diagonal_comparison <- function(
       f1_stability_sd = f1_stability_sd_values,
       dataset = run_name,
       n_cells = cell_counts,
+      n_runs = dataset_n_runs,
       stringsAsFactors = FALSE
     )
     
@@ -212,6 +217,24 @@ plot_diagonal_comparison <- function(
   # Define different shape isn't strictly needed for bar plots but keeping logic if needed later
   display_shapes <- c(16, 17, 15, 18, 3, 4) 
   
+  # Determine n_runs for labeling (use override, or auto-detect from data)
+  if (!is.null(n_runs_override)) {
+    n_runs_label <- n_runs_override
+  } else {
+    detected_runs <- unique(combined_data$n_runs)
+    detected_runs <- detected_runs[!is.na(detected_runs)]
+    if (length(detected_runs) == 1) {
+      n_runs_label <- detected_runs
+    } else if (length(detected_runs) > 1) {
+      n_runs_label <- paste(detected_runs, collapse = "/")
+      message("Note: Different datasets used different n_runs: ", n_runs_label)
+    } else {
+      n_runs_label <- "unknown"
+    }
+  }
+  n_runs_suffix <- paste0("_n", n_runs_label)
+  n_runs_subtitle <- paste0("Error bars from ", n_runs_label, " noise runs")
+  
   # ===== Plot 2a: PSS values comparison - NOT normalized =====
   
   plot_pss_comparison <- ggplot(combined_data, aes(x = cell_type, y = pss, fill = dataset)) +
@@ -239,7 +262,7 @@ plot_diagonal_comparison <- function(
   
   # Save plot 2a
   ggsave(
-    paste0(output_prefix, "_pss_by_celltype_comparison.svg"),
+    paste0(output_prefix, n_runs_suffix, "_pss_by_celltype_comparison.svg"),
     plot = plot_pss_comparison,
     width = 12, height = 8, units = "in"
   )
@@ -262,6 +285,7 @@ plot_diagonal_comparison <- function(
     scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
       title = "Stability by Cell Type Across Datasets",
+      subtitle = n_runs_subtitle,
       x = "Cell Type",
       y = "Stability (Fraction of cells remaining same type)"
     ) +
@@ -279,7 +303,7 @@ plot_diagonal_comparison <- function(
   
   # Save plot 3a
   ggsave(
-    paste0(output_prefix, "_stability_by_celltype_comparison.svg"),
+    paste0(output_prefix, n_runs_suffix, "_stability_by_celltype_comparison.svg"),
     plot = plot_stability_comparison,
     width = 12, height = 8, units = "in"
   )
@@ -301,7 +325,7 @@ plot_diagonal_comparison <- function(
       scale_fill_manual(values = dataset_colors, name = "Dataset") +
       labs(
         title = "Bidirectional Stability by Cell Type Across Datasets",
-        subtitle = "Penalizes both outflow (cells leaving) and inflow (cells arriving from other types)",
+        subtitle = paste0("Penalizes both outflow and inflow | ", n_runs_subtitle),
         x = "Cell Type",
         y = "Bi-Stability: 1 - (out + in) / original"
       ) +
@@ -318,7 +342,7 @@ plot_diagonal_comparison <- function(
       )
     
     ggsave(
-      paste0(output_prefix, "_bi_stability_by_celltype_comparison.svg"),
+      paste0(output_prefix, n_runs_suffix, "_bi_stability_by_celltype_comparison.svg"),
       plot = plot_bi_stability_comparison,
       width = 12, height = 8, units = "in"
     )
@@ -343,7 +367,7 @@ plot_diagonal_comparison <- function(
       scale_fill_manual(values = dataset_colors, name = "Dataset") +
       labs(
         title = "F1 Stability by Cell Type Across Datasets",
-        subtitle = "Harmonic mean of precision and recall: 2TP/(2TP+FP+FN)",
+        subtitle = paste0("Harmonic mean of precision and recall | ", n_runs_subtitle),
         x = "Cell Type",
         y = "F1 Stability"
       ) +
@@ -360,7 +384,7 @@ plot_diagonal_comparison <- function(
       )
     
     ggsave(
-      paste0(output_prefix, "_f1_stability_by_celltype_comparison.svg"),
+      paste0(output_prefix, n_runs_suffix, "_f1_stability_by_celltype_comparison.svg"),
       plot = plot_f1_stability_comparison,
       width = 12, height = 8, units = "in"
     )
@@ -419,7 +443,7 @@ plot_diagonal_comparison <- function(
         )
       
       ggsave(
-        paste0(output_prefix, "_stability_run_", run_idx, ".svg"),
+        paste0(output_prefix, n_runs_suffix, "_stability_run_", run_idx, ".svg"),
         plot = p_run,
         width = 12, height = 8, units = "in"
       )
@@ -506,5 +530,5 @@ a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow,
                                 "Freedman" = freedman_flow,
                                 "Cell Atlas" = cell_atlas_flow,
                                 "Takasato" = Takasato_full_flow),
-                           output_prefix="six2gfp/12.3.26/10runs_diagonal_comparison_"
+                           output_prefix="six2gfp/7.5.26/diagonal_comparison_"
 )

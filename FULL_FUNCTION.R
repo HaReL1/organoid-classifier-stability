@@ -1024,6 +1024,28 @@ analyze_noise_impact_on_prediction <- function(
   # rss_and_stab = data.frame(conf_matrix_long,RSS_long[,3])
   # colnames(rss_and_stab) = c("Original","New","Freq","PSS")
   
+  plot_and_save_stability_scatters(conf_matrix_fraction, RSS_mat_filtered, stability_pred, types_to_run_on, main_cell_type_order, output_prefix_base)
+  
+  #####
+  # temp_seurat_obj saved as run_without_noise.rds
+  # seurat_obj saved as train_seurat_processed.rds
+  return(list(
+    noised_prediction_matrix = noised_prediction,
+    change_counts = change_counts_df,
+    # mapping_score_results = mapping_score_results,
+    jsd_matrix = JSD_mat,
+    pss_matrix = RSS_mat,
+    stability_pred = stability_pred,
+    stability_per_run = stability_per_run,
+    bi_stability_per_run = bi_stability_per_run,
+    f1_stability_per_run = f1_stability_per_run,
+    seurat_noised_prediction_list = seurat_noised_prediction_list,
+    initial_anchors = temp_seurat_obj$test_anchors,
+    noised_anchors = noised_anchors_list
+  ))
+}
+
+plot_and_save_stability_scatters <- function(conf_matrix_fraction, RSS_mat_filtered, stability_pred, types_to_run_on, main_cell_type_order, output_prefix_base) {
   conf_matrix_fraction_ordered <- conf_matrix_fraction[types_to_run_on, types_to_run_on, drop=FALSE]
   RSS_mat_filtered_ordered <- RSS_mat_filtered[types_to_run_on, types_to_run_on, drop=FALSE]
   
@@ -1044,14 +1066,23 @@ analyze_noise_impact_on_prediction <- function(
   rss_and_stab$F1_Stability <- ifelse(rss_and_stab$is_diagonal, stability_pred$F1_Stability[match_idx], rss_and_stab$Freq)
 
   # Consistent Order in Heatmaps - Order full stability plot
-  rss_and_stab$Original <- factor(rss_and_stab$Original, levels = main_cell_type_order)
-  rss_and_stab$New <- factor(rss_and_stab$New, levels = main_cell_type_order)
+  # If main_cell_type_order is factor, we extract levels, else we use it as levels directly if it's char array
+  lvls <- if(is.factor(main_cell_type_order)) levels(main_cell_type_order) else main_cell_type_order
+  
+  rss_and_stab$Original <- factor(rss_and_stab$Original, levels = lvls)
+  rss_and_stab$New <- factor(rss_and_stab$New, levels = lvls)
   rss_and_stab <- rss_and_stab %>% drop_na()
 
   # Define function to generate the 3 plots per metric
   generate_scatter_plots <- function(metric_col, output_suffix, title_prefix, df_all) {
     df_diag <- df_all %>% filter(is_diagonal == TRUE)
-    fit <- lm(as.formula(paste(metric_col, "~ PSS")), data = df_diag)
+    
+    fit <- tryCatch({
+      lm(as.formula(paste(metric_col, "~ PSS")), data = df_diag)
+    }, error = function(e) return(NULL))
+    
+    if (is.null(fit)) return()
+    
     fit_summary <- summary(fit)
     intercept <- coef(fit)[1]
     slope <- coef(fit)[2]
@@ -1122,8 +1153,8 @@ analyze_noise_impact_on_prediction <- function(
       geom_point(color = "red", size = 4, alpha = 0.7) +
       geom_abline(intercept = intercept, slope = slope, color = "blue", linetype = "dashed", linewidth = 1) +
       annotate("text", 
-               x = min(df_diag$PSS),
-               y = max(df_diag[[metric_col]]), 
+               x = 0.02,
+               y = 0.98, 
                label = paste(equation_string, r_squared_string, sep = "\n"),
                hjust = 0, vjust = 1,
                size = 5,
@@ -1135,6 +1166,8 @@ analyze_noise_impact_on_prediction <- function(
         x = "Prediction Specificity Score (PSS)",
         y = paste(title_prefix, "(% of cells remaining same type after noise)")
       ) +
+      scale_x_continuous(limits = c(0, 1)) +
+      scale_y_continuous(limits = c(0, 1)) +
       theme_minimal()
     ggsave(paste0(output_prefix_base, "stability_pss_linear_fit", output_suffix, ".svg"), plot = stability_only_plot,
            width = 8, height = 7, units = "in")
@@ -1159,7 +1192,10 @@ analyze_noise_impact_on_prediction <- function(
                     "confusion_matrix.svg",
                     "pss_heatmap.svg",
                     "bi_stability_vs_pss_scatter_plot.svg",
-                    "f1_stability_vs_pss_scatter_plot.svg")
+                    "f1_stability_vs_pss_scatter_plot.svg",
+                    "stability_pss_linear_fit.svg",
+                    "stability_pss_linear_fit_bi.svg",
+                    "stability_pss_linear_fit_f1.svg")
   moved_files <- character(0)
   failed_files <- character(0)
   
@@ -1183,22 +1219,47 @@ analyze_noise_impact_on_prediction <- function(
       failed_files <- c(failed_files, file)
     })
   }
+}
+
+regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3) {
+  if (!file.exists(cache_path)) {
+    cat("Cache file not found:", cache_path, "\n")
+    return()
+  }
   
-  #####
-  # temp_seurat_obj saved as run_without_noise.rds
-  # seurat_obj saved as train_seurat_processed.rds
-  return(list(
-    noised_prediction_matrix = noised_prediction,
-    change_counts = change_counts_df,
-    # mapping_score_results = mapping_score_results,
-    jsd_matrix = JSD_mat,
-    pss_matrix = RSS_mat,
-    stability_pred = stability_pred,
-    stability_per_run = stability_per_run,
-    bi_stability_per_run = bi_stability_per_run,
-    f1_stability_per_run = f1_stability_per_run,
-    seurat_noised_prediction_list = seurat_noised_prediction_list,
-    initial_anchors = temp_seurat_obj$test_anchors,
-    noised_anchors = noised_anchors_list
-  ))
+  cat("Regenerating scatter plots for:", cache_path, "\n")
+  data <- readRDS(cache_path)
+  noised_prediction <- data$noised_prediction_matrix
+  stability_pred <- data$stability_pred
+  RSS_mat_filtered <- data$pss_matrix
+  output_prefix_base <- paste0(dirname(cache_path), "/")
+  
+  if (is.null(noised_prediction) || is.null(stability_pred) || is.null(RSS_mat_filtered)) {
+      cat("Missing required matrices in cache. Skipping.\n")
+      return()
+  }
+  
+  main_cell_type_order <- factor(
+    c("CM", "CM_DIV", "DIST_CD", "ENDO", "LOH", "MACROPHAG", "PODO", "PROX_1", "PROX_2", "UM"), 
+    levels = c("CM", "CM_DIV", "DIST_CD", "ENDO", "LOH", "MACROPHAG", "PODO", "PROX_1", "PROX_2", "UM")
+  )
+  
+  conf_matrix <- table(Original = noised_prediction[,1],
+                       New = noised_prediction[,ncol(noised_prediction)])
+  types_counts_conf_matrix <- rowSums(conf_matrix)
+  rows_to_keep <- names(types_counts_conf_matrix)[types_counts_conf_matrix >= min_cell_count_for_type]
+  cols_to_keep <- union(rows_to_keep, colnames(conf_matrix)[colSums(conf_matrix[rows_to_keep, , drop=FALSE]) > 0])
+  conf_matrix_filtered <- conf_matrix[rows_to_keep, cols_to_keep, drop=FALSE]
+  conf_matrix_fraction <- prop.table(conf_matrix_filtered, margin = 1)
+  
+  types_to_run_on <- intersect(colnames(RSS_mat_filtered), rownames(conf_matrix_fraction))
+  types_to_run_on <- intersect(types_to_run_on, levels(main_cell_type_order))
+  
+  if (length(types_to_run_on) < 2) {
+      cat("Not enough valid cell types to plot. Skipping.\n")
+      return()
+  }
+  
+  plot_and_save_stability_scatters(conf_matrix_fraction, RSS_mat_filtered, stability_pred, types_to_run_on, main_cell_type_order, output_prefix_base)
+  cat("Success.\n")
 }
