@@ -27,16 +27,24 @@ source("plot_subsampling_comparison.R")
 # RDS file. On re-run, loads instantly instead of re-running everything.
 # This is the most impactful optimization: if the script crashes mid-way,
 # already-completed removals load in seconds, not hours.
-run_or_load_flow <- function(cache_path, run_fn, label = "", force_replot = FALSE) {
+run_or_load_flow <- function(cache_path, run_fn, label = "", force_replot = FALSE, expected_noised_number = NULL) {
   if (file.exists(cache_path)) {
     cached <- readRDS(cache_path)
     # Validate: if cached result is missing F1 (old code), recompute
     if (!is.null(cached$stability_pred$F1_Stability)) {
-      cat(sprintf("  [CACHE HIT] Loading %s from %s\n", label, cache_path))
-      if (force_replot) {
-        regenerate_plots_from_cache(cache_path)
+      # Validate: if noised_number changed, recompute
+      cached_n <- ncol(cached$noised_prediction_matrix) - 1
+      if (!is.null(expected_noised_number) && cached_n != expected_noised_number) {
+        cat(sprintf("  [CACHE STALE] %s was run with n=%d but now requesting n=%s — recomputing\n",
+                    label, cached_n, expected_noised_number))
+        rm(cached); gc(verbose = FALSE)
+      } else {
+        cat(sprintf("  [CACHE HIT] Loading %s from %s\n", label, cache_path))
+        if (force_replot) {
+          regenerate_plots_from_cache(cache_path)
+        }
+        return(cached)
       }
-      return(cached)
     } else {
       cat(sprintf("  [CACHE STALE] %s missing F1_Stability — recomputing\n", label))
       rm(cached); gc(verbose = FALSE)
@@ -65,21 +73,23 @@ cat("\n\n========== SECTION A: ATLAS SUBSAMPLING ==========\n\n")
 section_a_start <- Sys.time()
 
 # --- A1. Baseline flow with anchors ---
-# Reuse existing flow ONLY if it has both anchors AND F1 (from updated FULL_FUNCTION.R)
-has_atlas_anchors <- !is.null(cell_atlas_flow$initial_anchors)
-has_atlas_f1 <- !is.null(cell_atlas_flow$stability_pred$F1_Stability)
+# Reuse existing flow ONLY if it has both anchors AND F1 (from updated FULL_FUNCTION.R) AND correct noised_number
+has_atlas_anchors <- exists("cell_atlas_flow") && !is.null(cell_atlas_flow$initial_anchors)
+has_atlas_f1 <- exists("cell_atlas_flow") && !is.null(cell_atlas_flow$stability_pred$F1_Stability)
+has_atlas_correct_n <- exists("cell_atlas_flow") && (ncol(cell_atlas_flow$noised_prediction_matrix) - 1) == 10
 
-if (has_atlas_anchors && has_atlas_f1) {
+if (has_atlas_anchors && has_atlas_f1 && has_atlas_correct_n) {
   cell_atlas_flow_anchors <- cell_atlas_flow
-  cat("  [REUSE] Using cell_atlas_flow (has anchors + F1)\n")
+  cat("  [REUSE] Using cell_atlas_flow (has anchors + F1 + n=10)\n")
 } else {
   if (!has_atlas_anchors) cat("  [INFO] cell_atlas_flow missing anchors — recomputing\n")
   if (!has_atlas_f1) cat("  [INFO] cell_atlas_flow missing F1_Stability — recomputing\n")
+  if (!has_atlas_correct_n) cat("  [INFO] cell_atlas_flow has wrong noised_number — recomputing\n")
   cell_atlas_flow_anchors <- run_or_load_flow(
     "six2gfp/subsampling/atlas_with_anchors/flow_result.rds",
     function() {
       analyze_noise_impact_on_prediction(
-        atlas_object, noised_number = 3,
+        atlas_object, noised_number = 10,
         train_Six2GFP, test_Six2GFP,
         ref_cell_type_column = "type", dims = 1:30,
         train_title = "SIX2GFP", test_title_prefix = "Kidney Cell Atlas",
@@ -90,11 +100,12 @@ if (has_atlas_anchors && has_atlas_f1) {
         return_anchors = TRUE
       )
     },
-    label = "Atlas baseline"
+    label = "Atlas baseline",
+    expected_noised_number = 10
   )
 }
 
-# --- A2. Single-type removals (loop over ALL types) ---
+# --- . Single-type removals (loop over ALL types) ---
 atlas_single_types <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "ENDO", "MACROPHAG")
 atlas_single_type_flows <- list()
 
@@ -107,7 +118,7 @@ for (idx in seq_along(atlas_single_types)) {
   flow <- run_or_load_flow(flow_cache, function() {
     info <- create_subsampled_seurat(atlas_object, cell_atlas_flow_anchors, type_to_remove, 0.0)
     analyze_noise_impact_on_prediction(
-      info$seurat, noised_number = 3,
+      info$seurat, noised_number = 10,
       train_Six2GFP, test_Six2GFP,
       ref_cell_type_column = "type", dims = 1:30,
       train_title = "SIX2GFP", test_title_prefix = paste0("Atlas_no_", type_to_remove),
@@ -117,7 +128,7 @@ for (idx in seq_along(atlas_single_types)) {
       use_cache = TRUE,
       return_anchors = TRUE
     )
-  }, label = paste0("Atlas no ", type_to_remove))
+  }, label = paste0("Atlas no ", type_to_remove), expected_noised_number = 10)
   
   comparison <- compare_flows(
     original_flow   = cell_atlas_flow_anchors,
@@ -155,7 +166,8 @@ no_cm_cmdiv_prox1_flow_anchors <- run_or_load_flow(
       return_anchors = TRUE
     )
   },
-  label = "Atlas no CM+CM_DIV+PROX_1"
+  label = "Atlas no CM+CM_DIV+PROX_1",
+  expected_noised_number = 3
 )
 gc(verbose = FALSE)
 
@@ -176,7 +188,8 @@ no_loh_cm_flow <- run_or_load_flow(
       return_anchors = TRUE
     )
   },
-  label = "Atlas no LOH+CM"
+  label = "Atlas no LOH+CM",
+  expected_noised_number = 3
 )
 gc(verbose = FALSE)
 
@@ -234,15 +247,17 @@ cat("\n\n========== SECTION B: UCHIMURA SUBSAMPLING ==========\n\n")
 section_b_start <- Sys.time()
 
 # --- B1. Baseline flow with anchors ---
-has_uchi_anchors <- !is.null(Uchimura_full_flow$initial_anchors)
-has_uchi_f1 <- !is.null(Uchimura_full_flow$stability_pred$F1_Stability)
+has_uchi_anchors <- exists("Uchimura_full_flow") && !is.null(Uchimura_full_flow$initial_anchors)
+has_uchi_f1 <- exists("Uchimura_full_flow") && !is.null(Uchimura_full_flow$stability_pred$F1_Stability)
+has_uchi_correct_n <- exists("Uchimura_full_flow") && (ncol(Uchimura_full_flow$noised_prediction_matrix) - 1) == 3
 
-if (has_uchi_anchors && has_uchi_f1) {
+if (has_uchi_anchors && has_uchi_f1 && has_uchi_correct_n) {
   Uchimura_flow_anchors <- Uchimura_full_flow
-  cat("  [REUSE] Using Uchimura_full_flow (has anchors + F1)\n")
+  cat("  [REUSE] Using Uchimura_full_flow (has anchors + F1 + n=3)\n")
 } else {
   if (!has_uchi_anchors) cat("  [INFO] Uchimura_full_flow missing anchors — recomputing\n")
   if (!has_uchi_f1) cat("  [INFO] Uchimura_full_flow missing F1_Stability — recomputing\n")
+  if (!has_uchi_correct_n) cat("  [INFO] Uchimura_full_flow has wrong noised_number — recomputing\n")
   Uchimura_flow_anchors <- run_or_load_flow(
     "six2gfp/subsampling/uchimura_with_anchors/flow_result.rds",
     function() {
@@ -258,7 +273,8 @@ if (has_uchi_anchors && has_uchi_f1) {
         return_anchors = TRUE
       )
     },
-    label = "Uchimura baseline"
+    label = "Uchimura baseline",
+    expected_noised_number = 3
   )
 }
 
@@ -285,7 +301,7 @@ for (idx in seq_along(uchimura_single_types)) {
       use_cache = TRUE,
       return_anchors = TRUE
     )
-  }, label = paste0("Uchimura no ", type_to_remove))
+  }, label = paste0("Uchimura no ", type_to_remove), expected_noised_number = 3)
   
   comparison <- compare_flows(
     original_flow   = Uchimura_flow_anchors,
@@ -322,7 +338,8 @@ uchi_no_distcd_loh_flow <- run_or_load_flow(
       return_anchors = TRUE
     )
   },
-  label = "Uchimura no DIST_CD+LOH"
+  label = "Uchimura no DIST_CD+LOH",
+  expected_noised_number = 3
 )
 gc(verbose = FALSE)
 
@@ -343,7 +360,8 @@ uchi_no_cm_cmdiv_flow <- run_or_load_flow(
       return_anchors = TRUE
     )
   },
-  label = "Uchimura no CM+CM_DIV"
+  label = "Uchimura no CM+CM_DIV",
+  expected_noised_number = 3
 )
 gc(verbose = FALSE)
 

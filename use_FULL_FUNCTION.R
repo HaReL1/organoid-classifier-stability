@@ -93,109 +93,132 @@ load(file = "freedman_seurat_processed") # - Figure 3
 
 source("FULL_FUNCTION.R")
 
-Uchimura_full_flow = analyze_noise_impact_on_prediction(
-  seurat_Uchimura_Humphreys_20,
-  noised_number = 5,
-  train_Six2GFP, # change to labeled_train_data
-  test_Six2GFP, # change to labeled_test_data
-  ref_cell_type_column = "type",
-  dims = 1:30,
-  train_title = "SIX2GFP",
-  test_title_prefix = "Uchimura",
-  n_neighbors = 8,
-  skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/12.3.26/Uchimura_noised/",
-  prediction_column_name = "predicted.type", # Column name for predictions in metadata
-  colors_feature_plot_noise = c('grey', '#f03b20'),
-  myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE,
-  use_cache = TRUE,
-  return_anchors = TRUE
-)
-saveRDS(Uchimura_full_flow, "six2gfp/12.3.26/Uchimura_full_flow5noise.rds")
-# Uchimura_full_flow <- readRDS("six2gfp/12.3.26/Uchimura_full_flow5noise.rds")
+cache_Uchimura <- "six2gfp/12.3.26/Uchimura_full_flow10noise.rds"
+if (file.exists(cache_Uchimura)) {
+  Uchimura_full_flow <- readRDS(cache_Uchimura)
+} else {
+  Uchimura_full_flow = analyze_noise_impact_on_prediction(
+    seurat_Uchimura_Humphreys_20,
+    noised_number = 10,
+    train_Six2GFP, # change to labeled_train_data
+    test_Six2GFP, # change to labeled_test_data
+    ref_cell_type_column = "type",
+    dims = 1:30,
+    train_title = "SIX2GFP",
+    test_title_prefix = "Uchimura",
+    n_neighbors = 8,
+    skip_neighbors = TRUE,
+    output_prefix_base = "six2gfp/12.3.26/Uchimura_noised/",
+    prediction_column_name = "predicted.type", # Column name for predictions in metadata
+    colors_feature_plot_noise = c('grey', '#f03b20'),
+    myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
+    return_all_suerats = FALSE,
+    use_cache = TRUE,
+    return_anchors = TRUE
+  )
+  saveRDS(Uchimura_full_flow, cache_Uchimura)
+}
 
 # temp_seurat_obj <- readRDS("six2gfp/newest_function/Uchimura_noised/_cache/run_without_noise.rds") # debug
 # main_cell_type_order <- temp_seurat_obj[["cell_type_order"]]
 # noised_prediction = Uchimura_full_flow$noised_prediction_matrix
 
-freedman_flow = analyze_noise_impact_on_prediction(
-  freedman_seurat_obj,
-  noised_number = 5,
-  train_Six2GFP, 
-  test_Six2GFP,
-  ref_cell_type_column = "type",
-  dims = 1:15,
-  train_title = "SIX2GFP",
-  test_title_prefix = "Freedman",
-  n_neighbors = 8,
-  skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/12.3.26/freedman_not_clean/",
-  prediction_column_name = "predicted.type", # Column name for predictions in metadata
-  colors_feature_plot_noise = c('grey', '#f03b20'),
-  myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE,
-  use_cache = TRUE,
-  return_anchors = TRUE
-)
-saveRDS(freedman_flow, "six2gfp/12.3.26/freedman_flow5noise.rds")
-# Uchimura_full_flow <- readRDS("six2gfp/12.3.26/freedman_flow5noise.rds")
+cache_freedman <- "six2gfp/12.3.26/freedman_flow10noise.rds"
+if (file.exists(cache_freedman)) {
+  freedman_flow <- readRDS(cache_freedman)
+} else {
+  freedman_flow = analyze_noise_impact_on_prediction(
+    freedman_seurat_obj,
+    noised_number = 10,
+    train_Six2GFP, 
+    test_Six2GFP,
+    ref_cell_type_column = "type",
+    dims = 1:15,
+    train_title = "SIX2GFP",
+    test_title_prefix = "Freedman",
+    n_neighbors = 8,
+    skip_neighbors = TRUE,
+    output_prefix_base = "six2gfp/12.3.26/freedman_not_clean/",
+    prediction_column_name = "predicted.type", # Column name for predictions in metadata
+    colors_feature_plot_noise = c('grey', '#f03b20'),
+    myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
+    return_all_suerats = FALSE,
+    use_cache = TRUE,
+    return_anchors = TRUE
+  )
+  saveRDS(freedman_flow, cache_freedman)
+}
 
-cell_atlas_flow = analyze_noise_impact_on_prediction(
-  atlas_object,
-  noised_number = 5,
-  train_Six2GFP, 
-  test_Six2GFP,
-  ref_cell_type_column = "type",
-  dims = 1:30,
-  train_title = "SIX2GFP",
-  test_title_prefix = "Kidney Cell Atlas",
-  n_neighbors = 8,
-  skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/12.3.26/kidney_cell_atlas_clean_no_fibroblast/",
-  prediction_column_name = "predicted.type", # Column name for predictions in metadata
-  colors_feature_plot_noise = c('grey', '#f03b20'),
-  myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE,
-  return_anchors = TRUE
-)
-saveRDS(cell_atlas_flow, "six2gfp/12.3.26/cell_atlas_flow5noise.rds")
-# cell_atlas_flow <- readRDS("six2gfp/12.3.26/cell_atlas_flow5noise.rds")
+cache_atlas <- "six2gfp/12.3.26/cell_atlas_flow10noise.rds"
+subsampling_atlas_cache <- "six2gfp/subsampling/atlas_with_anchors/flow_result.rds"
 
-Takasato_full_flow = analyze_noise_impact_on_prediction(
-  seurat_Takasato_Humphreys_20,
-  noised_number = 5,
-  train_Six2GFP, # change to labeled_train_data
-  test_Six2GFP, # change to labeled_test_data
-  ref_cell_type_column = "type",
-  dims = 1:30,
-  train_title = "SIX2GFP",
-  test_title_prefix = "Takasato",
-  n_neighbors = 8,
-  skip_neighbors = TRUE,
-  output_prefix_base = "six2gfp/12.3.26/Takasato_noised_tranpose/",
-  prediction_column_name = "predicted.type", # Column name for predictions in metadata
-  colors_feature_plot_noise = c('grey', '#f03b20'),
-  myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
-  return_all_suerats = FALSE,
-  use_cache = TRUE,
-  return_anchors = TRUE
-)
-saveRDS(Takasato_full_flow, "six2gfp/12.3.26/Takasato_full_flow5noise.rds")
-gm# cell_atlas_flow <- readRDS("six2gfp/12.3.26/Takasato_full_flow5noise.rds")
+if (file.exists(cache_atlas)) {
+  cell_atlas_flow <- readRDS(cache_atlas)
+} else if (file.exists(subsampling_atlas_cache)) {
+  # Reuse the 10-cycle flow already generated by the subsampling pipeline!
+  cell_atlas_flow <- readRDS(subsampling_atlas_cache)
+  saveRDS(cell_atlas_flow, cache_atlas)
+} else {
+  cell_atlas_flow = analyze_noise_impact_on_prediction(
+    atlas_object,
+    noised_number = 10,
+    train_Six2GFP, 
+    test_Six2GFP,
+    ref_cell_type_column = "type",
+    dims = 1:30,
+    train_title = "SIX2GFP",
+    test_title_prefix = "Kidney Cell Atlas",
+    n_neighbors = 8,
+    skip_neighbors = TRUE,
+    output_prefix_base = "six2gfp/12.3.26/kidney_cell_atlas_clean_no_fibroblast/",
+    prediction_column_name = "predicted.type", # Column name for predictions in metadata
+    colors_feature_plot_noise = c('grey', '#f03b20'),
+    myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
+    return_all_suerats = FALSE,
+    return_anchors = TRUE
+  )
+  saveRDS(cell_atlas_flow, cache_atlas)
+}
 
-# save results
-saveRDS(Uchimura_full_flow, "/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
-Uchimura_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
+cache_Takasato <- "six2gfp/12.3.26/Takasato_full_flow10noise.rds"
+if (file.exists(cache_Takasato)) {
+  Takasato_full_flow <- readRDS(cache_Takasato)
+} else {
+  Takasato_full_flow = analyze_noise_impact_on_prediction(
+    seurat_Takasato_Humphreys_20,
+    noised_number = 10,
+    train_Six2GFP, # change to labeled_train_data
+    test_Six2GFP, # change to labeled_test_data
+    ref_cell_type_column = "type",
+    dims = 1:30,
+    train_title = "SIX2GFP",
+    test_title_prefix = "Takasato",
+    n_neighbors = 8,
+    skip_neighbors = TRUE,
+    output_prefix_base = "six2gfp/12.3.26/Takasato_noised_tranpose/",
+    prediction_column_name = "predicted.type", # Column name for predictions in metadata
+    colors_feature_plot_noise = c('grey', '#f03b20'),
+    myColors_cell_types = NULL, # Colors for cell type plots, if NULL, Paired palette will be used
+    return_all_suerats = FALSE,
+    use_cache = TRUE,
+    return_anchors = TRUE
+  )
+  saveRDS(Takasato_full_flow, cache_Takasato)
+}
 
-saveRDS(freedman_flow, "/lab/six2gfp/12.3.26/10runs_freedman_flow")
-freedman_flow = readRDS("/lab/six2gfp/12.3.26/10runs_freedman_flow")
-
-saveRDS(cell_atlas_flow, "/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
-cell_atlas_flow = readRDS("/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
-
-saveRDS(Takasato_full_flow, "/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
-Takasato_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
+# Note: the lines below were hardcoding saving/loading to absolute paths. 
+# They are commented out to prevent overriding our cached objects above.
+# saveRDS(Uchimura_full_flow, "/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
+# Uchimura_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Uchimura_full_flow")
+#
+# saveRDS(freedman_flow, "/lab/six2gfp/12.3.26/10runs_freedman_flow")
+# freedman_flow = readRDS("/lab/six2gfp/12.3.26/10runs_freedman_flow")
+#
+# saveRDS(cell_atlas_flow, "/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
+# cell_atlas_flow = readRDS("/lab/six2gfp/12.3.26/10runs_cell_atlas_flow")
+#
+# saveRDS(Takasato_full_flow, "/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
+# Takasato_full_flow = readRDS("/lab/six2gfp/12.3.26/10runs_Takasato_full_flow")
 
 ###### Extra stuff ####
 Tubuloid_full_flow = analyze_noise_impact_on_prediction(

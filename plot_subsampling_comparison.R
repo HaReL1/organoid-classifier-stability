@@ -727,7 +727,7 @@ plot_subsampling_comparison <- function(
     # Save combined PDF with all paired barplots
     if (length(all_paired_plots) > 0) {
       pdf_file <- paste0(output_prefix, "_paired_barplots_all.pdf")
-      pdf(pdf_file, width = 10, height = 10)
+      pdf(pdf_file, width = 4, height = 6)
       for (p in all_paired_plots) {
         print(p)
       }
