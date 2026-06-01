@@ -1221,7 +1221,8 @@ plot_and_save_stability_scatters <- function(conf_matrix_fraction, RSS_mat_filte
   }
 }
 
-regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3) {
+regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
+                                        output_prefix_base = NULL) {
   if (!file.exists(cache_path)) {
     cat("Cache file not found:", cache_path, "\n")
     return()
@@ -1232,7 +1233,10 @@ regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3)
   noised_prediction <- data$noised_prediction_matrix
   stability_pred <- data$stability_pred
   RSS_mat_filtered <- data$pss_matrix
-  output_prefix_base <- paste0(dirname(cache_path), "/")
+  # Use the provided output dir, or fall back to the cache file's directory
+  if (is.null(output_prefix_base)) {
+    output_prefix_base <- paste0(dirname(cache_path), "/")
+  }
   
   if (is.null(noised_prediction) || is.null(stability_pred) || is.null(RSS_mat_filtered)) {
       cat("Missing required matrices in cache. Skipping.\n")
