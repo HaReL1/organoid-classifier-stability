@@ -49,10 +49,11 @@ cell_atlas_flow    <- .load_rds("six2gfp/12.3.26/cell_atlas_flow10noise.rds",   
 Takasato_full_flow <- .load_rds("six2gfp/12.3.26/Takasato_full_flow10noise.rds",   "Takasato_full_flow")
 
 # -- Atlas subsampling: baseline --
-cell_atlas_flow_anchors <- .load_rds(
-  "six2gfp/subsampling/atlas_with_anchors/flow_result.rds",
-  "cell_atlas_flow_anchors (baseline)"
-)
+cell_atlas_flow
+# cell_atlas_flow_anchors <- .load_rds(
+#   "six2gfp/subsampling/atlas_with_anchors/flow_result.rds",
+#   "cell_atlas_flow_anchors (baseline)"
+# )
 
 # -- Atlas subsampling: only the 3 removal types we need --
 # To add/remove types, edit this vector:
@@ -136,7 +137,7 @@ A4_ROW_HEIGHT <-  8.3  # in — A4 landscape; use 11.7 for portrait
 
 # Build result list: Baseline first, then the 3 removals in order
 .atlas_sub_results <- c(
-  list("Baseline" = cell_atlas_flow_anchors),
+  list("Baseline" = cell_atlas_flow),
   setNames(
     lapply(ATLAS_REMOVAL_TYPES, function(t) atlas_removal_flows[[t]]),
     paste0("No ", ATLAS_REMOVAL_TYPES)
@@ -147,7 +148,7 @@ A4_ROW_HEIGHT <-  8.3  # in — A4 landscape; use 11.7 for portrait
 
 atlas_subsampling_plots <- plot_subsampling_comparison(
   .atlas_sub_results,
-  output_prefix = "six2gfp/subsampling/atlas_single_removal_comparison"
+  output_prefix = "six2gfp/new/atlas_single_removal_comparison"
 )
 
 # --- Combine the 3 bi_stability paired barplots in a row for A4 ---
@@ -170,7 +171,7 @@ if (length(.paired_bi) > 0) {
       theme = theme(plot.title = element_text(size = 14, face = "bold"))
     )
 
-  .a4_out <- "six2gfp/subsampling/atlas_single_removal_comparison_paired_bi_stability_A4row.svg"
+  .a4_out <- "six2gfp/new/atlas_single_removal_comparison_paired_bi_stability_A4row.svg"
   ggsave(
     .a4_out,
     plot   = .combined_a4_row,
@@ -216,7 +217,7 @@ if (length(.diag_list) < 2) {
 } else {
   diagonal_plots <- plot_diagonal_comparison(
     .diag_list,
-    output_prefix = "six2gfp/7.5.26/diagonal_comparison_"
+    output_prefix = "six2gfp/new/diagonal_comparison_"
   )
 }
 
