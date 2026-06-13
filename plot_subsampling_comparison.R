@@ -282,7 +282,7 @@ plot_subsampling_comparison <- function(
     width = 12, height = 8, units = "in"
   )
   
-  # ===== Plot 3: Bidirectional Stability comparison =====
+  # ===== Plot 3: Bi-directional Stability comparison =====
   # Bi_Stability = max(0, 1 - (out + in) / original)
   # Penalizes both cells leaving AND cells arriving from other types
   
@@ -301,10 +301,10 @@ plot_subsampling_comparison <- function(
       } +
       scale_fill_manual(values = group_colors, name = "Removed Group") +
       labs(
-        title = "Bidirectional Stability: Effect of Group Removal",
+        title = "Bi-directional Stability: Effect of Group Removal",
         subtitle = "Penalizes both outflow (cells leaving) and inflow (cells arriving from other types)",
         x = "Cell Type",
-        y = "Bi-Stability: 1 - (out + in) / original"
+        y = "Bi-directional Stability: 1 - (out + in) / original"
       ) +
       theme_minimal() +
       theme(
@@ -325,7 +325,7 @@ plot_subsampling_comparison <- function(
     )
   } else {
     plot_bi_stability_comparison <- NULL
-    message("Bi_Stability not available in flow results (re-run with updated FULL_FUNCTION.R)")
+    message("Bi-directional Stability not available in flow results (re-run with updated FULL_FUNCTION.R)")
   }
   
   # ===== Plot 3b: F1 Stability comparison =====
@@ -579,9 +579,9 @@ plot_subsampling_comparison <- function(
         scale_fill_manual(values = group_colors[names(group_colors) != baseline_name], 
                           name = "Removed Group") +
         labs(
-          title = paste0("Bi-Stability Change vs Baseline (", baseline_name, ")"),
+          title = paste0("Bi-directional Stability Change vs Baseline (", baseline_name, ")"),
           x = "Cell Type",
-          y = "ΔBi-Stability (removal − baseline)"
+          y = "ΔBi-directional Stability (removal − baseline)"
         ) +
         theme_minimal() +
         theme(
@@ -652,7 +652,7 @@ plot_subsampling_comparison <- function(
     # Define which metrics to plot
     metric_configs <- list(
       list(col = "stability",    sd_col = "stability_sd",    label = "Stability",    title_prefix = "Stability"),
-      list(col = "bi_stability", sd_col = "bi_stability_sd", label = "Bi-Stability", title_prefix = "Bi-Stability"),
+      list(col = "bi_stability", sd_col = "bi_stability_sd", label = "Bi-directional Stability", title_prefix = "Bi-directional Stability"),
       list(col = "f1_stability", sd_col = "f1_stability_sd", label = "F1 Stability", title_prefix = "F1 Stability")
     )
     

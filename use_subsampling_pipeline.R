@@ -517,5 +517,5 @@ cat(sprintf("\n[UCHIMURA] Section B complete (incl. plotting) — total: %.1f mi
 #
 # Stability metrics computed:
 #   - Stability:    diagonal of confusion matrix (recall / outflow only)
-#   - Bi_Stability: 1 - (out + in) / original (penalizes both outflow & inflow)
+#   - Bi-directional Stability: 1 - (out + in) / original (penalizes both outflow & inflow)
 #   - F1_Stability: 2TP / (2TP + FP + FN) (harmonic mean of precision & recall)

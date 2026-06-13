@@ -308,7 +308,7 @@ plot_diagonal_comparison <- function(
     width = 12, height = 8, units = "in"
   )
   
-  # ===== Plot 3a-bis: Bidirectional Stability comparison =====
+  # ===== Plot 3a-bis: Bi-directional Stability comparison =====
   has_bi_stability <- any(!is.na(combined_data$bi_stability))
   has_bi_error_bars <- any(!is.na(combined_data$bi_stability_sd))
   
@@ -324,10 +324,10 @@ plot_diagonal_comparison <- function(
       } +
       scale_fill_manual(values = dataset_colors, name = "Dataset") +
       labs(
-        title = "Bidirectional Stability by Cell Type Across Datasets",
+        title = "Bi-directional Stability by Cell Type Across Datasets",
         subtitle = paste0("Penalizes both outflow and inflow | ", n_runs_subtitle),
         x = "Cell Type",
-        y = "Bi-Stability: 1 - (out + in) / original"
+        y = "Bi-directional Stability: 1 - (out + in) / original"
       ) +
       theme_minimal() +
       theme(
@@ -526,9 +526,11 @@ plot_diagonal_comparison <- function(
   ))
 }
 
-a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow, 
-                                "Freedman" = freedman_flow,
-                                "Cell Atlas" = cell_atlas_flow,
-                                "Takasato" = Takasato_full_flow),
-                           output_prefix="six2gfp/7.5.26/diagonal_comparison_"
-)
+## uncomment for using
+# a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow,
+#                                 "Freedman" = freedman_flow,
+#                                 "Cell Atlas" = cell_atlas_flow,
+#                                 "Takasato" = Takasato_full_flow),
+#                            output_prefix="six2gfp/7.5.26/negative_binomial/diagonal_comparison_"
+# )
+

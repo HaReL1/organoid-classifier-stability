@@ -12,6 +12,47 @@ library(ggrepel)
 library(tidyr)
 library(svglite)
 library(Matrix)
+library(grid)
+
+# ============================================================================
+# Override ggsave globally to force the "real" figure panels (UMAP, heatmaps)
+# to a fixed inches size. This ensures the panels are perfectly identical 
+# in size across all SVGs for easy alignment in graphic programs, while the 
+# overall file dimensions automatically adjust to accommodate varying text/legends.
+# ============================================================================
+ggsave <- function(filename, plot = last_plot(), width = NA, height = NA, units = c("in", "cm", "mm", "px"), ...) {
+  if (inherits(plot, "ggplot") || inherits(plot, "patchwork")) {
+    g <- ggplot2::ggplotGrob(plot)
+    panels <- grep("panel", g$layout$name)
+    if (length(panels) > 0) {
+      panel_index_w <- unique(g$layout$l[panels])
+      panel_index_h <- unique(g$layout$t[panels])
+      
+      # Force ZxY inches per panel
+      g$widths[panel_index_w] <- rep(unit(8, "in"), length(panel_index_w))
+      g$heights[panel_index_h] <- rep(unit(8, "in"), length(panel_index_h))
+      
+      # Calculate new bounding box to fit the fixed panels + all legends/text
+      total_width <- grid::convertWidth(sum(g$widths), unitTo = "in", valueOnly = TRUE)
+      total_height <- grid::convertHeight(sum(g$heights), unitTo = "in", valueOnly = TRUE)
+      
+      ggplot2::ggsave(filename, plot = g, width = total_width, height = total_height, units = "in", ...)
+      return(invisible(NULL))
+    }
+  }
+  
+  # Fallback for other objects
+  ggplot2::ggsave(filename, plot = plot, width = width, height = height, units = units, ...)
+}
+
+# Fixed color palette: each cell type always gets the same color
+CELL_TYPE_COLORS <- setNames(
+  scales::hue_pal()(10),
+  sort(c("CM", "CM_DIV", "DIST_CD", "ENDO", "LOH", "MACROPHAG", "PODO", "PROX_1", "PROX_2", "UM"))
+)
+# Resulting assignment (alphabetical → hue order):
+#   CM="#F8766D"  CM_DIV="#E58700"  DIST_CD="#C99800"  ENDO="#A3A500"  LOH="#6BB100"
+#   MACROPHAG="#00BA38"  PODO="#00C19F"  PROX_1="#00B8E7"  PROX_2="#619CFF"  UM="#FF61C3"
 
 analyze_noise_impact_on_prediction <- function(
     seurat_obj,
@@ -31,7 +72,12 @@ analyze_noise_impact_on_prediction <- function(
     return_all_suerats = FALSE,
     min_cell_count_for_type = 3,
     use_cache = TRUE,
-    return_anchors = FALSE
+    return_anchors = FALSE,
+    noise_model = "poisson", # options: "poisson", "dropout", "negative_binomial"
+    dropout_rate = 0.1,      # for "dropout" model
+    background_rate = 0.001, # for "dropout" model (fraction of matrix to add background)
+    background_mean = 1,     # for "dropout" model (mean of background counts)
+    nb_theta = 10            # for "negative_binomial" model (overdispersion parameter)
 ) {
   # 0. Create output directory if it doesn't exist ####
   if (!dir.exists(output_prefix_base)) {
@@ -39,19 +85,81 @@ analyze_noise_impact_on_prediction <- function(
   }
   
   # 1. Add noise function ####
-  add_poisson_noise <- function(seurat_obj) {
+  add_noise <- function(seurat_obj) {
     counts <- GetAssayData(seurat_obj, layer = "counts")
-    # A dgCMatrix has a slot 'x' that contains all the non-zero values.
-    noisy_x_values <- rpois(n = length(counts@x), lambda = counts@x)
-    # Reconstruct a sparse matrix directly, preserving dimensions and names
-    noisy_counts_sparse <- Matrix::sparseMatrix(
-      i = counts@i,         # Row indices of non-zero elements (from original)
-      p = counts@p,         # Pointers to column starts (from original)
-      x = noisy_x_values,   # The NEW noisy data
-      dims = dim(counts),
-      dimnames = dimnames(counts),
-      index1 = FALSE        # Important: Seurat's slots are 0-indexed
-    )
+    
+    if (noise_model == "poisson") {
+      # A dgCMatrix has a slot 'x' that contains all the non-zero values.
+      noisy_x_values <- rpois(n = length(counts@x), lambda = counts@x)
+      # Reconstruct a sparse matrix directly, preserving dimensions and names
+      noisy_counts_sparse <- Matrix::sparseMatrix(
+        i = counts@i,         # Row indices of non-zero elements (from original)
+        p = counts@p,         # Pointers to column starts (from original)
+        x = noisy_x_values,   # The NEW noisy data
+        dims = dim(counts),
+        dimnames = dimnames(counts),
+        index1 = FALSE        # Important: Seurat's slots are 0-indexed
+      )
+    } else if (noise_model == "negative_binomial") {
+      # Simulate biological overdispersion using Negative Binomial
+      noisy_x_values <- rnbinom(n = length(counts@x), mu = counts@x, size = nb_theta)
+      noisy_counts_sparse <- Matrix::sparseMatrix(
+        i = counts@i,
+        p = counts@p,
+        x = noisy_x_values,
+        dims = dim(counts),
+        dimnames = dimnames(counts),
+        index1 = FALSE
+      )
+    } else if (noise_model == "dropout") {
+      # 1. Apply poisson noise to existing non-zeros
+      noisy_x <- rpois(n = length(counts@x), lambda = counts@x)
+      # 2. Apply dropout (set a fraction to 0)
+      drop_mask <- runif(length(noisy_x)) < dropout_rate
+      noisy_x[drop_mask] <- 0
+      
+      # 3. Add background contamination (drop-in)
+      nrow_counts <- nrow(counts)
+      ncol_counts <- ncol(counts)
+      total_elements <- as.numeric(nrow_counts) * as.numeric(ncol_counts)
+      # Approximate binomial with poisson for efficiency
+      n_bg <- rpois(1, lambda = total_elements * background_rate)
+      
+      base_mat <- Matrix::sparseMatrix(
+        i = counts@i,
+        p = counts@p,
+        x = noisy_x,
+        dims = c(nrow_counts, ncol_counts),
+        dimnames = dimnames(counts),
+        index1 = FALSE
+      )
+      
+      if (n_bg > 0) {
+        # Generate random indices for background
+        bg_i <- sample(1:nrow_counts, n_bg, replace = TRUE)
+        bg_j <- sample(1:ncol_counts, n_bg, replace = TRUE)
+        bg_x <- rpois(n_bg, lambda = background_mean)
+        
+        # Keep only > 0 values to maintain sparsity
+        keep <- bg_x > 0
+        if (sum(keep) > 0) {
+          bg_mat <- Matrix::sparseMatrix(
+            i = bg_i[keep],
+            j = bg_j[keep],
+            x = bg_x[keep],
+            dims = c(nrow_counts, ncol_counts),
+            dimnames = dimnames(counts)
+          )
+          noisy_counts_sparse <- base_mat + bg_mat
+        } else {
+          noisy_counts_sparse <- base_mat
+        }
+      } else {
+        noisy_counts_sparse <- base_mat
+      }
+    } else {
+      stop(paste("Unknown noise_model:", noise_model))
+    }
     
     # Create the new Seurat object
     noisy_seurat <- CreateSeuratObject(counts = noisy_counts_sparse, project = "noised")
@@ -212,11 +320,12 @@ analyze_noise_impact_on_prediction <- function(
     
     # Consistent Order in Heatmaps - Get cell type order from training data
     cell_type_order <- unique(train_labeled_seurat[[ref_cell_type_column]])[[ref_cell_type_column]]
-    cell_type_order = factor(cell_type_order, levels = c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","ENDO","MACROPHAG"))
-    cell_type_order = sort(cell_type_order)
+    cell_type_order = factor(cell_type_order, levels = c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","MACROPHAG","ENDO"))
+    cell_type_order = cell_type_order[order(match(cell_type_order, levels(cell_type_order)))]
     if (is.null(myColors)) {
-      myColors <- brewer.pal(length(cell_type_order), "Paired") # use length of cell_type_order
-      names(myColors) <- cell_type_order # use names from cell_type_order
+      # Use the fixed global palette so colors are consistent across plots
+      # with different numbers of groups (subset of the full 10-type palette).
+      myColors <- CELL_TYPE_COLORS
     }
     
     if (is.null(colors_for_feature)) {
@@ -300,9 +409,14 @@ analyze_noise_impact_on_prediction <- function(
       }
       
       pairwise_confusion_df <- reshape2::melt(pairwise_confusion)
+      pairwise_confusion_df <- pairwise_confusion_df %>%
+        mutate(
+          label_val = round(value, 5),
+          label_str = ifelse(label_val == 0, "", as.character(label_val))
+        )
       p <- ggplot(data = pairwise_confusion_df, aes(Var1, Var2, fill = value)) +
         geom_tile() +
-        geom_text(aes(label = round(value,5))) +
+        geom_text(aes(label = label_str)) +
         scale_fill_gradient(low = "white", high = "red") +
         labs(x = "Class", y = "Class", title = paste("Pairwise Confusion Matrix -", title)) + # 2. Add Title
         theme_minimal()
@@ -398,17 +512,20 @@ analyze_noise_impact_on_prediction <- function(
         
         p1 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
-                     label.size = 3, repel = FALSE) + ggtitle("original")
+                     label.size = 3, repel = FALSE) + ggtitle("original") +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         
         # change the prediction according to this run
         plot_on_this_UMAP[[prediction_column_name]][current_cells]=test_query[[paste0("predicted.",ref_cell_type_column)]]
         
         p2 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
-                     label.size = 3, repel = FALSE) + ggtitle("new iteration")
+                     label.size = 3, repel = FALSE) + ggtitle("new iteration") +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         p2_alone = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                 group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
-                label.size = 5, repel = FALSE) + theme(legend.position = "none")
+                label.size = 5, repel = FALSE) + theme(legend.position = "none") +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
@@ -416,27 +533,43 @@ analyze_noise_impact_on_prediction <- function(
         
         ggsave(paste0(output_prefix, "_original_view_only_prediction_A.svg"), plot = p2_alone,
                width = 8, height = 8, units = "in")
+               
+        p2_alone_with_legend = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
+                group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
+                label.size = 5, repel = FALSE) +
+          scale_color_manual(values = CELL_TYPE_COLORS)
+        ggsave(paste0(output_prefix, "_original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
+               width = 10, height = 8, units = "in")
         
         
       }
       else {
         p1 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE,
-                     label.size = 3, repel = FALSE)
+                     label.size = 3, repel = FALSE) +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         
         
         plot_on_this_UMAP=AddMetaData(plot_on_this_UMAP,test_query$predicted.type,col.name = "predicted.type")
         p2 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
-                     label.size = 8, repel = FALSE)
+                     label.size = 8, repel = FALSE) +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
                width = 16, height = 9, units = "in")
         
         p2_alone = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
-                           label.size = 5, repel = FALSE) + theme(legend.position = "none")
+                           label.size = 5, repel = FALSE) + theme(legend.position = "none") +
+          scale_color_manual(values = CELL_TYPE_COLORS)
         
         ggsave(paste0(output_prefix, "_original_view_only_prediction_A.svg"), plot = p2_alone,
                width = 8, height = 8, units = "in")
+               
+        p2_alone_with_legend = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
+                           label.size = 5, repel = FALSE) +
+          scale_color_manual(values = CELL_TYPE_COLORS)
+        ggsave(paste0(output_prefix, "_original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
+               width = 10, height = 8, units = "in")
         
       }
       
@@ -519,7 +652,7 @@ analyze_noise_impact_on_prediction <- function(
   noised_prediction[,1] = temp_seurat_obj[["test"]]@meta.data[[prediction_column_name]]
   for( k in c(1:noised_number)) {
     print(paste0("running run #",k))
-    seurat_obj_noised = add_poisson_noise(seurat_obj)
+    seurat_obj_noised = add_noise(seurat_obj)
     results_noised <- process_seurat_data_iter(
       labeled_train_data = train_Six2GFP,
       labeled_test_data = test_Six2GFP,
@@ -567,99 +700,13 @@ analyze_noise_impact_on_prediction <- function(
   change_counts_df$complex_changes = count_number_of_changes
   
   # 5. Plot feature plot of those who changed ####
-  seurat_obj_with_changes <- AddMetaData(seurat_obj, change_counts_df$changes, col.name="Changes")
-  change_feature_plot <- FeaturePlot(seurat_obj_with_changes,
-                                     reduction = "umap", # original view
-                                     features = "Changes",
-                                     cols = colors_feature_plot_noise,
-                                     keep.scale = "all") +
-    ggtitle("Number of Prediction Changes with Noise")
-  ggsave(paste0(output_prefix_base, "change_feature_plot.svg"), plot = change_feature_plot,
-         width = 16, height = 9, units = "in")
+  plot_change_feature(seurat_obj, change_counts_df, colors_feature_plot_noise, output_prefix_base)
   
   # 5.5 and plot by prediction ####
-  prediction_data_original = temp_seurat_obj[["test"]]@assays[["prediction.score.type"]]@data # Use Original prediction
-  rownames(prediction_data_original)=gsub("-", "_", rownames(prediction_data_original))
-  prediction_data = results_noised[["test"]]@assays[["prediction.score.type"]]@data # Use noised prediction
-  rownames(prediction_data)=gsub("-", "_", rownames(prediction_data))
-  # all_cell_types <- union(rownames(prediction_data), rownames(prediction_data_original))
-  all_cell_types <- intersect(rownames(prediction_data), rownames(prediction_data_original))
-  for (t in all_cell_types){
-    # Prepare data for original prediction plot
-    original_prediction_values <- if(t %in% rownames(prediction_data_original)) {
-      prediction_data_original[t, , drop = FALSE]
-    } else {
-      print("NA_original")
-      rep(NA, ncol(seurat_obj))
-    }
-    
-    # Prepare data for noised prediction plot
-    noised_prediction_values <- if(t %in% rownames(prediction_data)) {
-      prediction_data[t, , drop = FALSE]
-    } else {
-      print("NA_noised")
-      rep(NA, ncol(seurat_obj))
-    }
-    
-    noised_prediction_plot = FeaturePlot(AddMetaData(seurat_obj, t(noised_prediction_values),
-                                                     col.name=paste0(t,"_prediction")),
-                                         reduction = "umap",
-                                         features = paste0(t,"_prediction"),
-                                         keep.scale = "all") + ggtitle(paste0("Noised ",t,"_prediction")) # 2. Add Title
-    original_prediction_plot = FeaturePlot(AddMetaData(seurat_obj, t(original_prediction_values),
-                                                       col.name=paste0(t,"_prediction")),
-                                           reduction = "umap",
-                                           features = paste0(t,"_prediction"),
-                                           keep.scale = "all") + ggtitle(paste0("Original ",t,"_prediction")) # 2. Add Title
-    
-    combined_feature_plot <- noised_prediction_plot | original_prediction_plot
-    ggsave(paste0(output_prefix_base,"noised_",t, "_prediction_original_view.svg"),plot = combined_feature_plot,
-           width = 16, height = 9, units = "in")
-  }
+  plot_noised_predictions_original_view(seurat_obj, temp_seurat_obj, results_noised, output_prefix_base)
   
   # 6. df that show who changed to what (proportions) ####
-  plot_data = as.data.frame(noised_prediction[,c(1, noised_number+1)]) %>%
-    setNames(c("Initial_Prediction", "Noised_Prediction")) %>%
-    group_by(Initial_Prediction) %>%
-    count(Noised_Prediction) %>%
-    mutate(proportion = n/sum(n)) %>%
-    ungroup()
-  
-  label_threshold <- 0.01
-  change_proportion_plot <- ggplot(plot_data, aes(x = factor(Initial_Prediction, levels = levels(main_cell_type_order)), 
-                                                  y = proportion, fill = Noised_Prediction)) +
-    geom_bar(stat = "identity", position = "stack", width = 0.7) +
-    geom_text(
-      aes(label = ifelse(proportion > label_threshold, 
-                         Noised_Prediction,""), # If the proportion is too small, the label is an empty string.
-          size = proportion), 
-      position = position_stack(vjust = 0.5),
-      # size = 3.5, 
-      color = 'white'
-      # lineheight = .8 # Adjust line spacing if using newline "\n"
-    ) +
-    scale_size_continuous(range = c(2.5, 5)) +
-    scale_y_continuous(labels = scales::percent_format(), expand = c(0,0)) +
-    scale_x_discrete(expand = c(0,0)) + 
-    labs(
-      title = "Transitions with Noise",
-      x = "Initial Prediction",
-      y = "Percentage",
-      fill = "Noised Prediction"
-    ) +
-    theme_minimal() +
-    theme(
-      legend.position = "none",
-      axis.ticks.y = element_line(color = "black", linewidth = 0.5), # Major ticks
-      axis.text.x = element_text(size = 13, angle = 45, hjust = 1),  # X-axis labels
-      axis.text.y = element_text(size = 13, angle = 0, hjust = 0.4), # Y-axis labels
-      axis.title.x = element_text(size = 14),                        # X-axis title
-      axis.title.y = element_text(size = 14),                        # Y-axis title
-      plot.title = element_text(size = 16, face = "bold")           # Main title
-    )
-  
-  ggsave(paste0(output_prefix_base, "change_proportion_plot.svg"), plot = change_proportion_plot,
-         width = 9, height = 9, units = "in")
+  plot_change_proportion(noised_prediction, main_cell_type_order, output_prefix_base)
   
   
   # 7. Confusion matrix ####
@@ -669,163 +716,29 @@ analyze_noise_impact_on_prediction <- function(
   # Handling Small Groups - Filter ROWS by original count, keep ALL columns that appear in New
   types_counts_conf_matrix <- rowSums(conf_matrix)
   rows_to_keep <- names(types_counts_conf_matrix)[types_counts_conf_matrix >= min_cell_count_for_type]
+  
+  # Identify removed types
+  removed_types_present <- names(types_counts_conf_matrix)[types_counts_conf_matrix < min_cell_count_for_type]
+  all_known_types <- levels(main_cell_type_order)
+  if (is.null(all_known_types)) all_known_types <- as.character(main_cell_type_order)
+  absent_types <- setdiff(all_known_types, names(types_counts_conf_matrix))
+  removed_types <- unique(c(removed_types_present, absent_types))
+  
   cols_to_keep <- colnames(conf_matrix)  # keep all types appearing in noised predictions
   # Only keep columns that also exist in rows (for consistent ordering), plus any new ones
   cols_to_keep <- union(rows_to_keep, colnames(conf_matrix)[colSums(conf_matrix[rows_to_keep, , drop=FALSE]) > 0])
+  
+  # Exclude removed types from columns entirely so they don't appear as empty columns
+  cols_to_keep <- setdiff(cols_to_keep, removed_types)
+  
   conf_matrix_filtered <- conf_matrix[rows_to_keep, cols_to_keep, drop=FALSE]
   
   conf_matrix_fraction <- prop.table(conf_matrix_filtered, margin = 1) # * 100
-  conf_matrix_long <- as.data.frame(as.table(conf_matrix_fraction))
-  names(conf_matrix_long) <- c("Original", "New", "Fraction")
   
-  # Consistent Order in Heatmaps - Order the confusion matrix plot
-  conf_matrix_long$Original <- factor(conf_matrix_long$Original, levels = main_cell_type_order)
-  conf_matrix_long$New <- factor(conf_matrix_long$New, levels = main_cell_type_order)
-  conf_matrix_long <- conf_matrix_long %>% drop_na() # remove rows with NA after filtering
-  
-  confusion_matrix_plot <- ggplot(conf_matrix_long, aes(x = New, y = Original, fill = Fraction)) +
-    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), 
-              color = "black", fill = NA, linewidth = 1, inherit.aes = FALSE) +
-    geom_tile(color = "white") +
-    geom_text(aes(label = sprintf("%.2f", Fraction)),
-              size = 7, family = "Arial") +
-    scale_fill_gradient(low = "white",
-                        high = "blue",
-                        name = "Fraction") +
-    theme_minimal() +
-    ggtitle("Transitions with noise") + # Confusion Matrix of Predictions
-    theme(legend.position = "none",
-          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
-          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
-          panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-  
-  ggsave(paste0(output_prefix_base, "confusion_matrix.svg"), plot = confusion_matrix_plot,
-         width = 9, height = 9, units = "in")
-  
-  # 8. mapping score https://www.nature.com/articles/s41467-021-25089-2 implemented by ChatGPT ####
-  # compute_avg_expression <- function(data, labels) {
-  #   data <- as.matrix(data)
-  #   if(!is.numeric(data)) {
-  #     data <- matrix(as.numeric(data), nrow=nrow(data), ncol=ncol(data))
-  #   }
-  #   unique_labels <- sort(unique(labels))
-  #   avg_expression <- t(sapply(unique_labels, function(label) {
-  #     colMeans(data[labels == label, , drop = FALSE])
-  #   }))
-  #   rownames(avg_expression) <- unique_labels
-  #   return(avg_expression)
-  # }
-  # 
-  # calculate_mapping_score <- function(query_avg, reference_avg) {
-  #   cor_matrix <- cor(t(log2(1+query_avg)), t(log2(1+reference_avg)), method = "pearson")
-  #   row_sums <- rowSums(cor_matrix)
-  #   col_sums <- colSums(cor_matrix)
-  #   total_sum <- sum(cor_matrix)
-  #   mapping_score_matrix <- cor_matrix - (row_sums %*% t(col_sums)) / total_sum
-  #   mapping_score <- mean(diag(cor_matrix))
-  #   return(list(correlation_matrix = cor_matrix, mapping_score = mapping_score, mapping_score_matrix = mapping_score_matrix))
-  # }
-  # 
-  # reference_data <- t(as.matrix(GetAssayData(seurat_obj, layer = "counts")))
-  # labels_reference <- factor(noised_prediction[,1])
-  # query_data <- t(as.matrix(GetAssayData(results_noised[["test"]], layer = "counts")))
-  # labels_query <- factor(noised_prediction[,ncol(noised_prediction)])
-  # 
-  # query_avg <- compute_avg_expression(query_data, labels_query)
-  # reference_avg <- compute_avg_expression(reference_data, labels_reference)
-  # mapping_score_results <- calculate_mapping_score(query_avg, reference_avg)
- 
-  # 8. mapping score (Efficient Version) - disabled ####
-  
-  # # Add the prediction labels to the metadata to group by them
-  # seurat_obj$labels_reference <- factor(noised_prediction[, 1])
-  # # Note: The 'results_noised' object is from the *last* noise iteration
-  # results_noised[["test"]]$labels_query <- factor(noised_prediction[, ncol(noised_prediction)])
-  # 
-  # print("Calculating average expression for mapping score (efficiently)...")
-  # 
-  # # Use Seurat's optimized function. It returns a list, we need the 'RNA' element.
-  # reference_avg_mat <- AverageExpression(seurat_obj, 
-  #                                        group.by = "labels_reference", 
-  #                                        assays = "RNA")$RNA
-  # 
-  # query_avg_mat <- AverageExpression(results_noised[["test"]], 
-  #                                    group.by = "labels_query", 
-  #                                    assays = "RNA")$RNA
-  # 
-  # # Define the mapping score function
-  # calculate_mapping_score <- function(query_avg, reference_avg) {
-  #   # Align genes before correlation
-  #   common_genes <- intersect(rownames(query_avg), rownames(reference_avg))
-  #   query_avg <- query_avg[common_genes, ]
-  #   reference_avg <- reference_avg[common_genes, ]
-  #   
-  #   query_avg_num <- as.matrix(query_avg[common_genes, ])
-  #   reference_avg_num <- as.matrix(reference_avg[common_genes, ])
-  #   storage.mode(query_avg_num) <- "numeric"
-  #   storage.mode(reference_avg_num) <- "numeric"
-  #   # The function expects (cell_types x genes), so we transpose
-  #   cor_matrix <- cor(t(log2(1 + query_avg_num)), t(log2(1 + reference_avg_num)), method = "pearson")
-  #   
-  #   row_sums <- rowSums(cor_matrix)
-  #   col_sums <- colSums(cor_matrix)
-  #   total_sum <- sum(cor_matrix)
-  #   mapping_score_matrix <- cor_matrix - (row_sums %*% t(col_sums)) / total_sum
-  #   mapping_score <- mean(diag(cor_matrix))
-  #   return(list(correlation_matrix = cor_matrix, mapping_score = mapping_score, mapping_score_matrix = mapping_score_matrix))
-  # }
-  # 
-  # # Now call the function with the efficiently calculated average matrices
-  # mapping_score_results <- calculate_mapping_score(query_avg_mat, reference_avg_mat)
-  # 
-  # mapping_score_matrix_long <- as.data.frame(as.table(mapping_score_results$mapping_score_matrix))
-  # names(mapping_score_matrix_long) <- c("Original", "Noised", "MappingScore")
-  # 
-  # # Handling Small Groups - Filter out small groups from mapping score
-  # types_to_keep_mapping <- intersect(types_to_keep_conf_matrix, main_cell_type_order) # use types from confusion matrix filtering
-  # mapping_score_matrix_long_filtered <- mapping_score_matrix_long %>%
-  #   filter(Original %in% types_to_keep_mapping, Noised %in% types_to_keep_mapping)
-  # mapping_score_matrix_long_filtered$Original <- factor(mapping_score_matrix_long_filtered$Original, levels = main_cell_type_order)
-  # mapping_score_matrix_long_filtered$Noised <- factor(mapping_score_matrix_long_filtered$Noised, levels = main_cell_type_order)
-  # mapping_score_matrix_long_filtered <- mapping_score_matrix_long_filtered %>% drop_na() # remove rows with NA after filtering
-  # 
-  # mapping_score_heatmap <- ggplot(mapping_score_matrix_long_filtered, aes(x = Noised, y = Original, fill = MappingScore)) +
-  #   geom_tile(color = "white") +
-  #   geom_text(aes(label = sprintf("%.3f", MappingScore)),
-  #             size = 3.5) +
-  #   scale_fill_gradient(low = "white",
-  #                       high = "blue",
-  #                       name = "MappingScore") +
-  #   theme_minimal() +
-  #   ggtitle("Mapping Score Heatmap") + # 2. Add Title
-  #   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-  #         panel.grid.major = element_blank(),
-  #         panel.grid.minor = element_blank())
-  # 
-  # ggsave(paste0(output_prefix_base, "mapping_score_heatmap.svg"), plot = mapping_score_heatmap,
-  #        width = 12, height = 9, units = "in")
+  plot_confusion_matrix_heatmap(conf_matrix_fraction, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base)
+  plot_confusion_matrix_raw_counts(conf_matrix_filtered, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base)
   
   # 9. JSD ####
-  drop_nan_rows_cols <- function(input_matrix, dimension = c("both", "row", "col")) {
-    dimension <- match.arg(dimension) # Ensure dimension is one of "both", "row", "col"
-    
-    if (dimension %in% c("both", "row")) {
-      # Identify rows where ALL elements are NaN
-      all_nan_rows <- apply(input_matrix, 1, function(row) all(is.nan(row)))
-      rows_to_keep <- !all_nan_rows # Keep rows that are NOT all NaN
-      input_matrix <- input_matrix[rows_to_keep, , drop = FALSE] # Subset rows
-    }
-    
-    if (dimension %in% c("both", "col")) {
-      # Identify columns where ALL elements are NaN
-      all_nan_cols <- apply(input_matrix, 2, function(col) all(is.nan(col)))
-      cols_to_keep <- !all_nan_cols # Keep columns that are NOT all NaN
-      input_matrix <- input_matrix[, cols_to_keep, drop = FALSE] # Subset columns
-    }
-    
-    return(input_matrix)
-  }
   calculate_entropy_jsd <- function(query) {
     log_pred <- log2(query)
     log_pred[is.infinite(log_pred)] <- 0
@@ -861,68 +774,13 @@ analyze_noise_impact_on_prediction <- function(
   JSD_mat_filtered <- drop_nan_rows_cols(JSD_mat, "both") # remove rows with NaN
   RSS_mat_filtered <- drop_nan_rows_cols(RSS_mat, "both") # also filter RSS_mat accordingly
   
-  JSD_long <- as.data.frame(as.table(JSD_mat_filtered))
-  names(JSD_long) <- c("P_R", "P_C", "JSD")
-  
-  # Consistent Order in Heatmaps - Order JSD heatmap
-  JSD_long$P_R <- factor(JSD_long$P_R, levels = main_cell_type_order)
-  JSD_long$P_C <- factor(JSD_long$P_C, levels = main_cell_type_order)
-  JSD_long <- JSD_long %>% drop_na() # remove rows with NA after filtering
-  
-  jsd_heatmap <- ggplot(JSD_long, aes(x = P_C, y = P_R, fill = JSD)) +
-    geom_tile(color = "white") +
-    geom_text(aes(label = sprintf("%.2f", JSD)),
-              size = 6) +
-    scale_fill_gradient(low = "white",
-                        high = "blue",
-                        name = "JSD") +
-    theme_minimal() +
-    ggtitle("JSD Heatmap") + 
-    theme(legend.position = "none",
-          axis.text.x = element_text(size = 13, angle = 0, hjust = 1),
-          axis.text.y = element_text(size = 13, angle = 90, hjust = 0.5),
-          panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-  
-  ggsave(paste0(output_prefix_base, "jsd_heatmap.svg"), plot = jsd_heatmap,
-         width = 12, height = 9, units = "in")
+  plot_jsd_heatmap(JSD_mat, main_cell_type_order, output_prefix_base)
   
   # filter out small groups
   types_to_run_on = intersect(colnames(RSS_mat_filtered), rownames(conf_matrix_fraction)) # use rownames from filtered conf_matrix
   types_to_run_on = intersect(types_to_run_on, main_cell_type_order) # ensure order is consisten
   
-  RSS_long <- as.data.frame(as.table(RSS_mat_filtered[types_to_run_on, types_to_run_on]))
-  names(RSS_long) <- c("P_R", "P_C", "RSS")
-  
-  # Consistent Order in Heatmaps - Order RSS heatmap
-  RSS_long$P_R <- factor(RSS_long$P_R, levels = main_cell_type_order)
-  RSS_long$P_C <- factor(RSS_long$P_C, levels = main_cell_type_order)
-  RSS_long <- RSS_long %>% drop_na() # remove rows with NA after filtering
-  RSS_long <- RSS_long %>%
-    mutate(
-      RSS_label = sprintf("%.2f", RSS), 
-      RSS_label = ifelse(RSS_label == "-0.00", "0.00", RSS_label) # correct the "-0.00" issue
-    )
-  
-  rss_heatmap <- ggplot(RSS_long, aes(x = P_C, y = P_R, fill = RSS)) +
-    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), 
-              color = "black", fill = NA, linewidth = 1, inherit.aes = FALSE) +
-    geom_tile(color = "white") +
-    geom_text(aes(label = RSS_label),
-              size = 7, family = "Arial") +
-    scale_fill_gradient(low = "white",
-                        high = "blue",
-                        name = "RSS") +
-    theme_minimal() +
-    ggtitle("Jensen Shannon Similarity") +
-    theme(legend.position = "none",
-          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
-          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
-          panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-  
-  ggsave(paste0(output_prefix_base, "pss_heatmap.svg"), plot = rss_heatmap,
-         width = 9, height = 9, units = "in")
+  plot_pss_heatmap(RSS_mat_filtered, types_to_run_on, main_cell_type_order, output_prefix_base)
   
   # 10. PSS vs Stability ####
   
@@ -943,7 +801,7 @@ analyze_noise_impact_on_prediction <- function(
     stability_pred[i,1] = RSS_mat_filtered[type, type] # from stage #9
     stability_pred[i,2] = conf_matrix_fraction[type, type] # from stage #5.5
     
-    # Bidirectional stability: penalizes both outflow AND inflow
+    # Bi-directional stability: penalizes both outflow AND inflow
     # out = cells originally type X that changed to something else
     # in  = cells from other types that became type X after noise
     # Bi_Stability = max(0, 1 - (out + in) / original)
@@ -980,7 +838,7 @@ analyze_noise_impact_on_prediction <- function(
       run_conf_frac <- prop.table(run_conf_filtered, margin = 1)
       for (type in common_types) {
         stability_per_run[type, run_idx] <- run_conf_frac[type, type]
-        # Bidirectional stability per run
+        # Bi-directional stability per run
         stayed_run <- run_conf_filtered[type, type]
         original_run <- sum(run_conf_filtered[type, ])
         noised_run <- sum(run_conf_filtered[, type])
@@ -996,23 +854,7 @@ analyze_noise_impact_on_prediction <- function(
     }
   }
   
-  stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() +
-    ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
-  
-  ggsave(paste0(output_prefix_base, "stability_vs_pss_scatter_plot.svg"), plot = stability_plot,
-         width = 12, height = 9, units = "in")
-
-  bi_stability_plot = ggplot(stability_pred, aes(x=PSS, y=Bi_Stability)) + geom_point() + theme_minimal() +
-    ggtitle("Bidirectional Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
-  
-  ggsave(paste0(output_prefix_base, "bi_stability_vs_pss_scatter_plot.svg"), plot = bi_stability_plot,
-         width = 12, height = 9, units = "in")
-
-  f1_stability_plot = ggplot(stability_pred, aes(x=PSS, y=F1_Stability)) + geom_point() + theme_minimal() +
-    ggtitle("F1 Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
-  
-  ggsave(paste0(output_prefix_base, "f1_stability_vs_pss_scatter_plot.svg"), plot = f1_stability_plot,
-         width = 12, height = 9, units = "in")
+  plot_stability_vs_pss_scatters(stability_pred, output_prefix_base)
   
   # plot also the full table
   # conf_matrix_fraction_ordered = conf_matrix_fraction[types_to_run_on,types_to_run_on, drop=FALSE]
@@ -1174,7 +1016,7 @@ plot_and_save_stability_scatters <- function(conf_matrix_fraction, RSS_mat_filte
   }
   
   generate_scatter_plots("Freq", "", "Stability", rss_and_stab)
-  generate_scatter_plots("Bi_Stability", "_bi", "Bi_Stability", rss_and_stab)
+  generate_scatter_plots("Bi_Stability", "_bi", "Bi-directional Stability", rss_and_stab)
   generate_scatter_plots("F1_Stability", "_f1", "F1_Stability", rss_and_stab)
   
   
@@ -1189,6 +1031,8 @@ plot_and_save_stability_scatters <- function(conf_matrix_fraction, RSS_mat_filte
                     "all_freq_vs_pss_scatter_plot_bi_with_fit.svg",
                     "all_freq_vs_pss_scatter_plot_f1_with_fit.svg",
                     "change_proportion_plot.svg",
+                    "confusion_matrix_raw_counts.svg",
+                    "confusion_matrix_raw_counts_sum.svg",
                     "confusion_matrix.svg",
                     "pss_heatmap.svg",
                     "bi_stability_vs_pss_scatter_plot.svg",
@@ -1221,6 +1065,437 @@ plot_and_save_stability_scatters <- function(conf_matrix_fraction, RSS_mat_filte
   }
 }
 
+# ============================================================================
+# Shared helper functions for plotting (used by both main flow and regenerate)
+# ============================================================================
+
+plot_confusion_matrix_heatmap <- function(conf_matrix_fraction, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base) {
+  conf_matrix_long <- as.data.frame(as.table(conf_matrix_fraction))
+  names(conf_matrix_long) <- c("Original", "New", "Fraction")
+  
+  kept_levels <- setdiff(all_known_types, removed_types)
+  conf_matrix_long$Original <- factor(conf_matrix_long$Original, levels = kept_levels)
+  conf_matrix_long$New <- factor(conf_matrix_long$New, levels = kept_levels)
+  conf_matrix_long <- conf_matrix_long %>% drop_na()
+  conf_matrix_long <- conf_matrix_long %>%
+    mutate(
+      Fraction_label = sprintf("%.2f", Fraction),
+      Fraction_label = ifelse(Fraction_label == "-0.00", "0.00", Fraction_label),
+      Fraction_label = ifelse(Fraction_label == "0.00", "0", Fraction_label)
+    )
+  
+  caption_text <- if (length(removed_types) > 0) {
+    paste0("Excluded due to 0 or insufficient initial cells (<", min_cell_count_for_type, "): ", paste(removed_types, collapse = ", "))
+  } else {
+    NULL
+  }
+  
+  confusion_matrix_plot <- ggplot(conf_matrix_long, aes(x = New, y = Original, fill = Fraction)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, 
+             color = "black", fill = NA, linewidth = 1) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Fraction_label),
+              size = 7, family = "Arial") +
+    scale_fill_gradient(low = "white",
+                        high = "blue",
+                        name = "Fraction") +
+    theme_minimal() +
+    labs(title = "Transitions with noise", caption = caption_text) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.caption = element_text(hjust = 0, size = 10, color = "gray30"))
+  
+  ggsave(paste0(output_prefix_base, "confusion_matrix.svg"), plot = confusion_matrix_plot,
+         width = 9, height = 9, units = "in")
+}
+
+plot_confusion_matrix_raw_counts <- function(conf_matrix_filtered, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base) {
+  # Convert raw counts matrix to long format
+  conf_matrix_long <- as.data.frame(as.table(conf_matrix_filtered))
+  names(conf_matrix_long) <- c("Original", "New", "Count")
+  
+  # Normalize counts
+  row_sums <- rowSums(conf_matrix_filtered)
+  col_sums <- colSums(conf_matrix_filtered)
+  
+  conf_matrix_long$NormalizedSum <- apply(conf_matrix_long, 1, function(row) {
+    orig <- as.character(row["Original"])
+    new_type <- as.character(row["New"])
+    count <- as.numeric(row["Count"])
+    
+    r_sum <- row_sums[orig]
+    
+    if (orig == new_type) {
+      # Diagonal cell: (out_count + in_count) / original_count
+      stayed <- count
+      original_count <- r_sum
+      noised_count <- if (new_type %in% names(col_sums)) col_sums[new_type] else 0
+      out_count <- original_count - stayed
+      in_count <- noised_count - stayed
+      
+      if (is.na(original_count) || original_count == 0) {
+        0
+      } else {
+        max(0, 1 - (out_count + in_count) / original_count)
+      }
+    } else {
+      # Non-diagonal cell: [cell/(original col row sum)] + [cell/(new col row sum)]
+      c_sum <- row_sums[new_type]
+      
+      term1 <- if (is.na(r_sum) || r_sum == 0) 0 else count / r_sum
+      term2 <- if (is.na(c_sum) || c_sum == 0) 0 else count / c_sum
+      
+      term1 + term2
+    }
+  })
+  
+  kept_levels <- setdiff(all_known_types, removed_types)
+  conf_matrix_long$Original <- factor(conf_matrix_long$Original, levels = kept_levels)
+  conf_matrix_long$New <- factor(conf_matrix_long$New, levels = kept_levels)
+  conf_matrix_long <- conf_matrix_long %>% drop_na()
+  
+  caption_text <- if (length(removed_types) > 0) {
+    paste0("Excluded due to 0 or insufficient initial cells (<", min_cell_count_for_type, "): ", paste(removed_types, collapse = ", "))
+  } else {
+    NULL
+  }
+  
+  conf_matrix_long <- conf_matrix_long %>%
+    mutate(Count_label = ifelse(Count == 0, "0", as.character(Count)))
+  
+  # 1. Colored by raw counts
+  confusion_matrix_raw_plot <- ggplot(conf_matrix_long, aes(x = New, y = Original, fill = Count)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, 
+             color = "black", fill = NA, linewidth = 1) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Count_label),
+              size = 7, family = "Arial") +
+    scale_fill_continuous(low = "white",
+                          high = "blue",
+                          name = "Count",
+                          trans = "log1p") +
+    theme_minimal() +
+    labs(title = "Transitions with noise (colored by raw counts)", caption = caption_text) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.caption = element_text(hjust = 0, size = 10, color = "gray30"))
+  
+  ggsave(paste0(output_prefix_base, "confusion_matrix_raw_counts.svg"), plot = confusion_matrix_raw_plot,
+         width = 9, height = 9, units = "in")
+
+  # 2. Colored by normalized sum & diagonal stability-based instability
+ 
+  if (!is.null(caption_text)) {
+    caption_text <- paste0(caption_text, '\n')
+  } 
+  caption_text <- paste0(caption_text, 'Colored by: diagonal: Bi_Stability-based, \n\t\tnon-diagonal: cell/rowSum + cell/newColRowSum')
+
+  confusion_matrix_sum_plot <- ggplot(conf_matrix_long, aes(x = New, y = Original, fill = NormalizedSum)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, 
+             color = "black", fill = NA, linewidth = 1) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Count_label),
+              size = 7, family = "Arial") +
+    scale_fill_continuous(low = "white",
+                          high = "blue",
+                          name = "NormalizedSum",
+                          trans = "log1p") +
+    theme_minimal() +
+    labs(title = "Transitions with noise raw counts", caption = caption_text) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.caption = element_text(hjust = 0, size = 10, color = "gray30"))
+  
+  ggsave(paste0(output_prefix_base, "confusion_matrix_raw_counts_sum.svg"), plot = confusion_matrix_sum_plot,
+         width = 9, height = 9, units = "in")
+}
+
+plot_change_proportion <- function(noised_prediction, main_cell_type_order, output_prefix_base) {
+  lvls <- if(is.factor(main_cell_type_order)) levels(main_cell_type_order) else main_cell_type_order
+  
+  plot_data <- as.data.frame(noised_prediction[, c(1, ncol(noised_prediction))]) %>%
+    setNames(c("Initial_Prediction", "Noised_Prediction")) %>%
+    group_by(Initial_Prediction) %>%
+    count(Noised_Prediction) %>%
+    mutate(proportion = n/sum(n)) %>%
+    ungroup()
+  
+  label_threshold <- 0.01
+  change_proportion_plot <- ggplot(plot_data, aes(x = factor(Initial_Prediction, levels = lvls), 
+                                                  y = proportion, fill = Noised_Prediction)) +
+    geom_bar(stat = "identity", position = "stack", width = 0.7) +
+    geom_text(
+      aes(label = ifelse(proportion > label_threshold, 
+                         Noised_Prediction,""), 
+          size = proportion), 
+      position = position_stack(vjust = 0.5),
+      color = 'white'
+    ) +
+    scale_size_continuous(range = c(2.5, 5)) +
+    scale_y_continuous(labels = scales::percent_format(), expand = c(0,0)) +
+    scale_x_discrete(expand = c(0,0)) + 
+    labs(
+      title = "Transitions with Noise",
+      x = "Initial Prediction",
+      y = "Percentage",
+      fill = "Noised Prediction"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.ticks.y = element_line(color = "black", linewidth = 0.5),
+      axis.text.x = element_text(size = 13, angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 13, angle = 0, hjust = 0.4),
+      axis.title.x = element_text(size = 14),
+      axis.title.y = element_text(size = 14),
+      plot.title = element_text(size = 16, face = "bold")
+    )
+  
+  ggsave(paste0(output_prefix_base, "change_proportion_plot.svg"), plot = change_proportion_plot,
+         width = 9, height = 9, units = "in")
+}
+
+plot_stability_vs_pss_scatters <- function(stability_pred, output_prefix_base) {
+  stability_plot = ggplot(stability_pred, aes(x=PSS, y=Stability)) + geom_point() + theme_minimal() +
+    ggtitle("Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
+  
+  ggsave(paste0(output_prefix_base, "stability_vs_pss_scatter_plot.svg"), plot = stability_plot,
+         width = 12, height = 9, units = "in")
+
+  bi_stability_plot = ggplot(stability_pred, aes(x=PSS, y=Bi_Stability)) + geom_point() + theme_minimal() +
+    ggtitle("Bi-directional Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
+  
+  ggsave(paste0(output_prefix_base, "bi_stability_vs_pss_scatter_plot.svg"), plot = bi_stability_plot,
+         width = 12, height = 9, units = "in")
+
+  f1_stability_plot = ggplot(stability_pred, aes(x=PSS, y=F1_Stability)) + geom_point() + theme_minimal() +
+    ggtitle("F1 Stability vs PSS") + geom_text(label=rownames(stability_pred), vjust = 1.5)
+  
+  ggsave(paste0(output_prefix_base, "f1_stability_vs_pss_scatter_plot.svg"), plot = f1_stability_plot,
+         width = 12, height = 9, units = "in")
+}
+
+plot_pss_heatmap <- function(RSS_mat_filtered, types_to_run_on, main_cell_type_order, output_prefix_base) {
+  RSS_long <- as.data.frame(as.table(RSS_mat_filtered[types_to_run_on, types_to_run_on]))
+  names(RSS_long) <- c("P_R", "P_C", "RSS")
+  
+  RSS_long$P_R <- factor(RSS_long$P_R, levels = main_cell_type_order)
+  RSS_long$P_C <- factor(RSS_long$P_C, levels = main_cell_type_order)
+  RSS_long <- RSS_long %>% drop_na()
+  RSS_long <- RSS_long %>%
+    mutate(
+      RSS_label = sprintf("%.2f", RSS), 
+      RSS_label = ifelse(RSS_label == "-0.00", "0.00", RSS_label),
+      RSS_label = ifelse(RSS_label == "0.00", "0", RSS_label)
+    )
+  
+  rss_heatmap <- ggplot(RSS_long, aes(x = P_C, y = P_R, fill = RSS)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, 
+             color = "black", fill = NA, linewidth = 1) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = RSS_label),
+              size = 7, family = "Arial") +
+    scale_fill_gradient(low = "white",
+                        high = "blue",
+                        name = "RSS") +
+    theme_minimal() +
+    ggtitle("Jensen Shannon Similarity") +
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 14, angle = 0, hjust = 0.5),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+  
+  ggsave(paste0(output_prefix_base, "pss_heatmap.svg"), plot = rss_heatmap,
+         width = 9, height = 9, units = "in")
+}
+
+drop_nan_rows_cols <- function(input_matrix, dimension = c("both", "row", "col")) {
+  dimension <- match.arg(dimension)
+  
+  if (dimension %in% c("both", "row")) {
+    all_nan_rows <- apply(input_matrix, 1, function(row) all(is.nan(row)))
+    rows_to_keep <- !all_nan_rows
+    input_matrix <- input_matrix[rows_to_keep, , drop = FALSE]
+  }
+  
+  if (dimension %in% c("both", "col")) {
+    all_nan_cols <- apply(input_matrix, 2, function(col) all(is.nan(col)))
+    cols_to_keep <- !all_nan_cols
+    input_matrix <- input_matrix[, cols_to_keep, drop = FALSE]
+  }
+  
+  return(input_matrix)
+}
+
+plot_change_feature <- function(seurat_obj, change_counts_df, colors_feature_plot_noise = c('grey', '#f03b20'), output_prefix_base) {
+  seurat_obj_with_changes <- AddMetaData(seurat_obj, change_counts_df$changes, col.name="Changes")
+  change_feature_plot <- FeaturePlot(seurat_obj_with_changes,
+                                     reduction = "umap",
+                                     features = "Changes",
+                                     cols = colors_feature_plot_noise,
+                                     keep.scale = "all") +
+    ggtitle("Number of Prediction Changes with Noise")
+  ggsave(paste0(output_prefix_base, "change_feature_plot.svg"), plot = change_feature_plot,
+         width = 16, height = 9, units = "in")
+}
+
+plot_noised_predictions_original_view <- function(seurat_obj, temp_seurat_obj, results_noised, output_prefix_base) {
+  prediction_data_original = temp_seurat_obj[["test"]]@assays[["prediction.score.type"]]@data
+  rownames(prediction_data_original)=gsub("-", "_", rownames(prediction_data_original))
+  prediction_data = results_noised[["test"]]@assays[["prediction.score.type"]]@data
+  rownames(prediction_data)=gsub("-", "_", rownames(prediction_data))
+  
+  all_cell_types <- intersect(rownames(prediction_data), rownames(prediction_data_original))
+  for (t in all_cell_types){
+    original_prediction_values <- if(t %in% rownames(prediction_data_original)) {
+      prediction_data_original[t, , drop = FALSE]
+    } else {
+      print("NA_original")
+      rep(NA, ncol(seurat_obj))
+    }
+    
+    noised_prediction_values <- if(t %in% rownames(prediction_data)) {
+      prediction_data[t, , drop = FALSE]
+    } else {
+      print("NA_noised")
+      rep(NA, ncol(seurat_obj))
+    }
+    
+    noised_prediction_plot = FeaturePlot(AddMetaData(seurat_obj, t(noised_prediction_values),
+                                                     col.name=paste0(t,"_prediction")),
+                                         reduction = "umap",
+                                         features = paste0(t,"_prediction"),
+                                         keep.scale = "all") + ggtitle(paste0("Noised ",t,"_prediction"))
+    original_prediction_plot = FeaturePlot(AddMetaData(seurat_obj, t(original_prediction_values),
+                                                       col.name=paste0(t,"_prediction")),
+                                           reduction = "umap",
+                                           features = paste0(t,"_prediction"),
+                                           keep.scale = "all") + ggtitle(paste0("Original ",t,"_prediction"))
+    
+    combined_feature_plot <- noised_prediction_plot | original_prediction_plot
+    ggsave(paste0(output_prefix_base,"noised_",t, "_prediction_original_view.svg"),plot = combined_feature_plot,
+           width = 16, height = 9, units = "in")
+  }
+}
+
+plot_jsd_heatmap <- function(JSD_mat, main_cell_type_order, output_prefix_base) {
+  JSD_mat_filtered <- drop_nan_rows_cols(JSD_mat, "both")
+  
+  JSD_long <- as.data.frame(as.table(JSD_mat_filtered))
+  names(JSD_long) <- c("P_R", "P_C", "JSD")
+  
+  lvls <- if(is.factor(main_cell_type_order)) levels(main_cell_type_order) else main_cell_type_order
+  JSD_long$P_R <- factor(JSD_long$P_R, levels = lvls)
+  JSD_long$P_C <- factor(JSD_long$P_C, levels = lvls)
+  JSD_long <- JSD_long %>% drop_na()
+  JSD_long <- JSD_long %>%
+    mutate(
+      JSD_label = sprintf("%.2f", JSD),
+      JSD_label = ifelse(JSD_label == "-0.00", "0.00", JSD_label),
+      JSD_label = ifelse(JSD_label == "0.00", "0", JSD_label)
+    )
+  
+  jsd_heatmap <- ggplot(JSD_long, aes(x = P_C, y = P_R, fill = JSD)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = JSD_label),
+              size = 6) +
+    scale_fill_gradient(low = "white",
+                        high = "blue",
+                        name = "JSD") +
+    theme_minimal() +
+    ggtitle("JSD Heatmap") + 
+    theme(legend.position = "none",
+          axis.text.x = element_text(size = 13, angle = 0, hjust = 1),
+          axis.text.y = element_text(size = 13, angle = 90, hjust = 0.5),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+  
+  ggsave(paste0(output_prefix_base, "jsd_heatmap.svg"), plot = jsd_heatmap,
+         width = 12, height = 9, units = "in")
+}
+
+plot_seurat_dependent_plots_from_cache <- function(cache_path, change_counts_df, seurat_noised_prediction_list, output_prefix_base) {
+  clean_output_prefix <- sub("/$", "", output_prefix_base)
+  original_dir <- file.path(dirname(cache_path), basename(clean_output_prefix))
+  
+  run_without_noise_path <- file.path(original_dir, "_cache", "run_without_noise.rds")
+  train_seurat_processed_path <- file.path(original_dir, "_cache", "train_seurat_processed.rds")
+  
+  if (!file.exists(train_seurat_processed_path) || !file.exists(run_without_noise_path)) {
+    cat("Could not find cache files. Skipping DimPlots, change features, and noised prediction original view plots.\n")
+    return()
+  }
+  
+  seurat_obj <- readRDS(train_seurat_processed_path)
+  temp_seurat_obj <- readRDS(run_without_noise_path)
+  test_query <- temp_seurat_obj[["test"]]
+  
+  current_cells <- names(test_query$predicted.type)
+  if (is.null(current_cells)) current_cells <- colnames(test_query)
+  
+  # 1. DimPlots
+  if ("predicted.type" %in% colnames(seurat_obj@meta.data)) {
+    if(!is.null(seurat_obj@reductions$ref.umap)) { 
+      reduction <- 'ref.umap' 
+    } else { 
+      reduction <- 'umap' 
+    }
+    
+    seurat_obj[["predicted.type"]][current_cells] <- test_query[["predicted.type"]]
+    
+    p2_alone = DimPlot(seurat_obj, cells=current_cells, reduction = reduction,
+                       group.by = "predicted.type", label = TRUE,
+                       label.size = 5, repel = FALSE) + theme(legend.position = "none") +
+      scale_color_manual(values = CELL_TYPE_COLORS)
+    ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A.svg"), plot = p2_alone,
+           width = 8, height = 8, units = "in")
+           
+    p2_alone_with_legend = DimPlot(seurat_obj, cells=current_cells, reduction = reduction,
+                       group.by = "predicted.type", label = TRUE,
+                       label.size = 5, repel = FALSE) +
+      scale_color_manual(values = CELL_TYPE_COLORS)
+    ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
+           width = 10, height = 8, units = "in")
+           
+  } else {
+    seurat_obj <- AddMetaData(seurat_obj, test_query$predicted.type, col.name = "predicted.type")
+    p2_alone = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = "predicted.type",
+                       label.size = 5, repel = FALSE) + theme(legend.position = "none") +
+      scale_color_manual(values = CELL_TYPE_COLORS)
+    ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A.svg"), plot = p2_alone,
+           width = 8, height = 8, units = "in")
+           
+    p2_alone_with_legend = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = "predicted.type",
+                       label.size = 5, repel = FALSE) +
+      scale_color_manual(values = CELL_TYPE_COLORS)
+    ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
+           width = 10, height = 8, units = "in")
+  }
+  
+  # 2. Change Feature Plot
+  if (!is.null(change_counts_df)) {
+    plot_change_feature(seurat_obj, change_counts_df, c('grey', '#f03b20'), output_prefix_base)
+  }
+  
+  # 3. Noised Predictions Original View Plot
+  if (!is.null(seurat_noised_prediction_list) && length(seurat_noised_prediction_list) > 0) {
+    results_noised <- seurat_noised_prediction_list[[length(seurat_noised_prediction_list)]]
+    plot_noised_predictions_original_view(seurat_obj, temp_seurat_obj, results_noised, output_prefix_base)
+  }
+}
+
+# ============================================================================
+
 regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
                                         output_prefix_base = NULL) {
   if (!file.exists(cache_path)) {
@@ -1228,11 +1503,14 @@ regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
     return()
   }
   
-  cat("Regenerating scatter plots for:", cache_path, "\n")
+  cat("Regenerating plots for:", cache_path, "\n")
   data <- readRDS(cache_path)
   noised_prediction <- data$noised_prediction_matrix
   stability_pred <- data$stability_pred
   RSS_mat_filtered <- data$pss_matrix
+  JSD_mat <- data$jsd_matrix
+  change_counts_df <- data$change_counts
+  
   # Use the provided output dir, or fall back to the cache file's directory
   if (is.null(output_prefix_base)) {
     output_prefix_base <- paste0(dirname(cache_path), "/")
@@ -1244,15 +1522,23 @@ regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
   }
   
   main_cell_type_order <- factor(
-    c("CM", "CM_DIV", "DIST_CD", "ENDO", "LOH", "MACROPHAG", "PODO", "PROX_1", "PROX_2", "UM"), 
-    levels = c("CM", "CM_DIV", "DIST_CD", "ENDO", "LOH", "MACROPHAG", "PODO", "PROX_1", "PROX_2", "UM")
+    c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "MACROPHAG", "ENDO"), 
+    levels = c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "MACROPHAG", "ENDO")
   )
   
   conf_matrix <- table(Original = noised_prediction[,1],
                        New = noised_prediction[,ncol(noised_prediction)])
   types_counts_conf_matrix <- rowSums(conf_matrix)
   rows_to_keep <- names(types_counts_conf_matrix)[types_counts_conf_matrix >= min_cell_count_for_type]
+  
+  all_known_types <- levels(main_cell_type_order)
+  removed_types_present <- names(types_counts_conf_matrix)[types_counts_conf_matrix < min_cell_count_for_type]
+  absent_types <- setdiff(all_known_types, names(types_counts_conf_matrix))
+  removed_types <- unique(c(removed_types_present, absent_types))
+  
   cols_to_keep <- union(rows_to_keep, colnames(conf_matrix)[colSums(conf_matrix[rows_to_keep, , drop=FALSE]) > 0])
+  cols_to_keep <- setdiff(cols_to_keep, removed_types)
+  
   conf_matrix_filtered <- conf_matrix[rows_to_keep, cols_to_keep, drop=FALSE]
   conf_matrix_fraction <- prop.table(conf_matrix_filtered, margin = 1)
   
@@ -1264,6 +1550,22 @@ regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
       return()
   }
   
+  # Reuse shared helper functions
+  plot_change_proportion(noised_prediction, main_cell_type_order, output_prefix_base)
+  plot_confusion_matrix_heatmap(conf_matrix_fraction, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base)
+  plot_confusion_matrix_raw_counts(conf_matrix_filtered, all_known_types, removed_types, min_cell_count_for_type, output_prefix_base)
+  
+  if (!is.null(JSD_mat)) {
+    plot_jsd_heatmap(JSD_mat, main_cell_type_order, output_prefix_base)
+  }
+  
+  plot_pss_heatmap(RSS_mat_filtered, types_to_run_on, main_cell_type_order, output_prefix_base)
+  
+  # DimPlots, change counts feature plot, and noised prediction feature plots from cache
+  plot_seurat_dependent_plots_from_cache(cache_path, change_counts_df, data$seurat_noised_prediction_list, output_prefix_base)
+  
+  plot_stability_vs_pss_scatters(stability_pred, output_prefix_base)
   plot_and_save_stability_scatters(conf_matrix_fraction, RSS_mat_filtered, stability_pred, types_to_run_on, main_cell_type_order, output_prefix_base)
+  # plot_normalized_sum_vs_pss(conf_matrix_filtered, RSS_mat_filtered, types_to_run_on, main_cell_type_order, output_prefix_base)
   cat("Success.\n")
 }

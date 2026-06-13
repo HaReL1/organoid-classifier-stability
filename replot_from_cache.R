@@ -21,6 +21,7 @@
 source("FULL_FUNCTION.R")              # provides regenerate_plots_from_cache()
 source("plot_subsampling_comparison.R") # provides plot_subsampling_comparison()
 source("plot_diagonal_comparison.R")   # provides plot_diagonal_comparison()
+# source("plot_normalized_sum_vs_pss.R") # provides plot_normalized_sum_vs_pss()
 library(patchwork)                     # for combining plots into A4 layout
 
 
@@ -94,7 +95,14 @@ cat("===== Section 1: Regenerating main_plots =====\n")
   list(cache  = "six2gfp/12.3.26/cell_atlas_flow10noise.rds",
        output = "six2gfp/new/kidney_cell_atlas_clean_no_fibroblast/"),
   list(cache  = "six2gfp/12.3.26/Takasato_full_flow10noise.rds",
-       output = "six2gfp/new/Takasato_noised_tranpose/")
+       output = "six2gfp/new/Takasato_noised_tranpose/"),
+  list(cache  = "six2gfp/Vanslambrouck_noised/Vanslambrouck_full_flow10noise.rds",
+       output = "six2gfp/new/Vanslambrouck_noised/")
+)
+
+.main_flows <- list(
+  list(cache  = "six2gfp/12.3.26/cell_atlas_flow10noise.rds",
+       output = "six2gfp/new/kidney_cell_atlas_clean/")
 )
 
 for (.entry in .main_flows) {
@@ -115,7 +123,7 @@ cat("\n===== Section 1 complete =====\n\n")
 # combined PDF to:
 #   six2gfp/subsampling/atlas_single_removal_comparison*
 #
-# After that, the 3 bi_stability paired barplots (one per removal type) are
+# After that, the 3 bi-directional stability paired barplots (one per removal type) are
 # arranged side-by-side into a single A4-landscape figure.
 #
 # ── DIMENSIONS ──
@@ -151,7 +159,7 @@ atlas_subsampling_plots <- plot_subsampling_comparison(
   output_prefix = "six2gfp/new/atlas_single_removal_comparison"
 )
 
-# --- Combine the 3 bi_stability paired barplots in a row for A4 ---
+# --- Combine the 3 bi-directional stability paired barplots in a row for A4 ---
 .paired_bi <- list()
 for (.type in ATLAS_REMOVAL_TYPES) {
   .key <- paste0("No ", .type, "_bi_stability")
@@ -159,15 +167,15 @@ for (.type in ATLAS_REMOVAL_TYPES) {
   if (!is.null(.p)) {
     .paired_bi[[.type]] <- .p
   } else {
-    warning(paste0("Paired bi_stability plot not found for key: ", .key,
-                   "\n  (check that bi_stability data exists in the cached flow)"))
+    warning(paste0("Paired bi-directional stability plot not found for key: ", .key,
+                   "\n  (check that bi-directional stability data exists in the cached flow)"))
   }
 }
 
 if (length(.paired_bi) > 0) {
   .combined_a4_row <- wrap_plots(.paired_bi, nrow = 1) +
     plot_annotation(
-      title = "Bi-Stability by Cell Type: Effect of Atlas Cell-Type Removal",
+      title = "Bi-directional Stability by Cell Type: Effect of Atlas Cell-Type Removal",
       theme = theme(plot.title = element_text(size = 14, face = "bold"))
     )
 
