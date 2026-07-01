@@ -45,6 +45,80 @@ ggsave <- function(filename, plot = last_plot(), width = NA, height = NA, units 
   ggplot2::ggsave(filename, plot = plot, width = width, height = height, units = units, ...)
 }
 
+# ============================================================================
+# Setup Roboto Font for all plots
+# ============================================================================
+font_dir <- file.path(getwd(), "Roboto_fonts")
+if (requireNamespace("systemfonts", quietly = TRUE)) {
+  systemfonts::register_font(
+    name = "Roboto",
+    plain = file.path(font_dir, "static", "Roboto-Regular.ttf"),
+    bold = file.path(font_dir, "static", "Roboto-Bold.ttf"),
+    italic = file.path(font_dir, "static", "Roboto-Italic.ttf"),
+    bolditalic = file.path(font_dir, "static", "Roboto-BoldItalic.ttf")
+  )
+  systemfonts::register_font(
+    name = "Roboto Medium",
+    plain = file.path(font_dir, "static", "Roboto-Medium.ttf"),
+    bold = file.path(font_dir, "static", "Roboto-Bold.ttf"),
+    italic = file.path(font_dir, "static", "Roboto-MediumItalic.ttf"),
+    bolditalic = file.path(font_dir, "static", "Roboto-BoldItalic.ttf")
+  )
+} else if (requireNamespace("sysfonts", quietly = TRUE)) {
+  sysfonts::font_add(
+    family = "Roboto",
+    regular = file.path(font_dir, "static", "Roboto-Regular.ttf"),
+    bold = file.path(font_dir, "static", "Roboto-Bold.ttf"),
+    italic = file.path(font_dir, "static", "Roboto-Italic.ttf"),
+    bolditalic = file.path(font_dir, "static", "Roboto-BoldItalic.ttf")
+  )
+  sysfonts::font_add(
+    family = "Roboto Medium",
+    regular = file.path(font_dir, "static", "Roboto-Medium.ttf"),
+    bold = file.path(font_dir, "static", "Roboto-Bold.ttf"),
+    italic = file.path(font_dir, "static", "Roboto-MediumItalic.ttf"),
+    bolditalic = file.path(font_dir, "static", "Roboto-BoldItalic.ttf")
+  )
+  if (requireNamespace("showtext", quietly = TRUE)) showtext::showtext_auto()
+}
+
+# Apply Roboto universally to all ggplot and Seurat objects
+ggplot2::theme_set(
+  ggplot2::theme_get() + 
+  ggplot2::theme(
+    text = ggplot2::element_text(family = "Roboto Medium"),
+    axis.text = ggplot2::element_text(family = "Roboto Medium"),
+    legend.text = ggplot2::element_text(family = "Roboto Medium"),
+    title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20),
+    plot.title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20),
+    axis.title = ggplot2::element_text(family = "Roboto", size = 20),
+    legend.title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20)
+  )
+)
+
+# Override theme_minimal so its default base_family doesn't reset Roboto
+default_theme_minimal <- ggplot2::theme_minimal
+theme_minimal <- function(base_size = 12, base_family = "Roboto Medium", ...) {
+  default_theme_minimal(base_size = base_size, base_family = base_family, ...) +
+    ggplot2::theme(
+      text = ggplot2::element_text(family = "Roboto Medium"),
+      axis.text = ggplot2::element_text(family = "Roboto Medium"),
+      legend.text = ggplot2::element_text(family = "Roboto Medium"),
+      title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20),
+      plot.title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20),
+      axis.title = ggplot2::element_text(family = "Roboto", size = 20),
+      legend.title = ggplot2::element_text(family = "Roboto", face = "bold", size = 20)
+    )
+}
+
+# Update default fonts for geom_text and ggrepel
+ggplot2::update_geom_defaults("text", list(family = "Roboto Medium"))
+ggplot2::update_geom_defaults("label", list(family = "Roboto Medium"))
+if (requireNamespace("ggrepel", quietly = TRUE)) {
+  ggplot2::update_geom_defaults("text_repel", list(family = "Roboto Medium"))
+  ggplot2::update_geom_defaults("label_repel", list(family = "Roboto Medium"))
+}
+
 # Fixed color palette: each cell type always gets the same color
 CELL_TYPE_COLORS <- setNames(
   scales::hue_pal()(10),
@@ -1095,7 +1169,7 @@ plot_confusion_matrix_heatmap <- function(conf_matrix_fraction, all_known_types,
              color = "black", fill = NA, linewidth = 1) +
     geom_tile(color = "white") +
     geom_text(aes(label = Fraction_label),
-              size = 7, family = "Arial") +
+              size = 7) +
     scale_fill_gradient(low = "white",
                         high = "blue",
                         name = "Fraction") +
@@ -1172,7 +1246,7 @@ plot_confusion_matrix_raw_counts <- function(conf_matrix_filtered, all_known_typ
              color = "black", fill = NA, linewidth = 1) +
     geom_tile(color = "white") +
     geom_text(aes(label = Count_label),
-              size = 7, family = "Arial") +
+              size = 7) +
     scale_fill_continuous(low = "white",
                           high = "blue",
                           name = "Count",
@@ -1201,7 +1275,7 @@ plot_confusion_matrix_raw_counts <- function(conf_matrix_filtered, all_known_typ
              color = "black", fill = NA, linewidth = 1) +
     geom_tile(color = "white") +
     geom_text(aes(label = Count_label),
-              size = 7, family = "Arial") +
+              size = 7) +
     scale_fill_continuous(low = "white",
                           high = "blue",
                           name = "NormalizedSum",
@@ -1303,7 +1377,7 @@ plot_pss_heatmap <- function(RSS_mat_filtered, types_to_run_on, main_cell_type_o
              color = "black", fill = NA, linewidth = 1) +
     geom_tile(color = "white") +
     geom_text(aes(label = RSS_label),
-              size = 7, family = "Arial") +
+              size = 7) +
     scale_fill_gradient(low = "white",
                         high = "blue",
                         name = "RSS") +

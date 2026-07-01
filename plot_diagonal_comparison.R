@@ -48,7 +48,7 @@ plot_diagonal_comparison <- function(
       run_result <- run_results_list[[run_name]]
       
       if (is.null(run_result$stability_pred)) {
-          warning(paste("Run", run_name, "missing stability_pred, skipping for cell type intersection"))
+          warning(paste("Run", run_name, "missing stability_pred, skipping for cell type collection"))
           next
       }
       
@@ -57,14 +57,14 @@ plot_diagonal_comparison <- function(
       if (is.null(common_cell_types)) {
           common_cell_types <- current_types
       } else {
-          common_cell_types <- intersect(common_cell_types, current_types)
+          common_cell_types <- union(common_cell_types, current_types)
       }
   }
   
   if (length(common_cell_types) == 0) {
-      stop("No common cell types found across the provided runs.")
+      stop("No cell types found across the provided runs.")
   }
-  print(paste("Common cell types found:", paste(common_cell_types, collapse=", ")))
+  print(paste("Cell types found:", paste(common_cell_types, collapse=", ")))
 
   
   # Extract diagonal data from all runs
@@ -198,7 +198,7 @@ plot_diagonal_comparison <- function(
       filter(cell_type %in% common_cell_types)
 
   # Enforce specific order for cell types
-  desired_order <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","ENDO","MACROPHAG")
+  desired_order <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD") # ENDO & MACROPHAG removed
   # Retrieve intersection of desired order and available (common) types to avoid NA levels
   final_levels <- intersect(desired_order, common_cell_types)
   
@@ -209,10 +209,18 @@ plot_diagonal_comparison <- function(
 
   combined_data$cell_type <- factor(combined_data$cell_type, levels = final_levels)
   
+  # Enforce specific order for datasets (matching input list order)
+  valid_datasets <- intersect(names(run_results_list), unique(combined_data$dataset))
+  combined_data$dataset <- factor(combined_data$dataset, levels = valid_datasets)
+  
+  # Fill in missing dataset-celltype combinations so dodging preserves width and we can print n=0
+  combined_data <- combined_data %>%
+    tidyr::complete(cell_type, dataset, fill = list(n_cells = 0))
+  
   # Define colors and shapes for different datasets
-  num_datasets <- length(unique(combined_data$dataset))
+  num_datasets <- length(valid_datasets)
   dataset_colors <- scales::hue_pal()(num_datasets)
-  names(dataset_colors) <- unique(combined_data$dataset)
+  names(dataset_colors) <- valid_datasets
   
   # Define different shape isn't strictly needed for bar plots but keeping logic if needed later
   display_shapes <- c(16, 17, 15, 18, 3, 4) 
@@ -238,9 +246,9 @@ plot_diagonal_comparison <- function(
   # ===== Plot 2a: PSS values comparison - NOT normalized =====
   
   plot_pss_comparison <- ggplot(combined_data, aes(x = cell_type, y = pss, fill = dataset)) +
-    geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+    geom_bar(stat = "identity", width = 0.85, position = position_dodge(width = 0.85, preserve = "single"), alpha = 0.8) +
     geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
-              position = position_dodge(width = 0.8), 
+              position = position_dodge(width = 0.85, preserve = "single"), 
               vjust = 0.5, hjust = 0.5, size = 2.5, angle = 90) +
     scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
@@ -261,10 +269,10 @@ plot_diagonal_comparison <- function(
     )
   
   # Save plot 2a
-  ggsave(
+  ggplot2::ggsave(
     paste0(output_prefix, n_runs_suffix, "_pss_by_celltype_comparison.svg"),
     plot = plot_pss_comparison,
-    width = 12, height = 8, units = "in"
+    width = 8.3, height = 5.85, units = "in"
   )
   
   
@@ -274,13 +282,13 @@ plot_diagonal_comparison <- function(
   has_error_bars <- any(!is.na(combined_data$stability_sd))
   
   plot_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = stability, fill = dataset)) +
-    geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+    geom_bar(stat = "identity", width = 0.85, position = position_dodge(width = 0.85, preserve = "single"), alpha = 0.8) +
     geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
-              position = position_dodge(width = 0.8), 
+              position = position_dodge(width = 0.85, preserve = "single"), 
               vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
     { if (has_error_bars) 
         geom_errorbar(aes(ymin = stability - stability_sd, ymax = stability + stability_sd),
-                      position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+                      position = position_dodge(width = 0.85, preserve = "single"), width = 0.25, linewidth = 0.4)
     } +
     scale_fill_manual(values = dataset_colors, name = "Dataset") +
     labs(
@@ -302,10 +310,10 @@ plot_diagonal_comparison <- function(
     )
   
   # Save plot 3a
-  ggsave(
+  ggplot2::ggsave(
     paste0(output_prefix, n_runs_suffix, "_stability_by_celltype_comparison.svg"),
     plot = plot_stability_comparison,
-    width = 12, height = 8, units = "in"
+    width = 8.3, height = 5.85, units = "in"
   )
   
   # ===== Plot 3a-bis: Bi-directional Stability comparison =====
@@ -314,13 +322,13 @@ plot_diagonal_comparison <- function(
   
   if (has_bi_stability) {
     plot_bi_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = bi_stability, fill = dataset)) +
-      geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+      geom_bar(stat = "identity", width = 0.85, position = position_dodge(width = 0.85, preserve = "single"), alpha = 0.8) +
       geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
-                position = position_dodge(width = 0.8), 
+                position = position_dodge(width = 0.85, preserve = "single"), 
                 vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
       { if (has_bi_error_bars) 
           geom_errorbar(aes(ymin = bi_stability - bi_stability_sd, ymax = bi_stability + bi_stability_sd),
-                        position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+                        position = position_dodge(width = 0.85, preserve = "single"), width = 0.25, linewidth = 0.4)
       } +
       scale_fill_manual(values = dataset_colors, name = "Dataset") +
       labs(
@@ -341,10 +349,10 @@ plot_diagonal_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, n_runs_suffix, "_bi_stability_by_celltype_comparison.svg"),
       plot = plot_bi_stability_comparison,
-      width = 12, height = 8, units = "in"
+      width = 8.3, height = 5.85, units = "in"
     )
   } else {
     plot_bi_stability_comparison <- NULL
@@ -356,13 +364,13 @@ plot_diagonal_comparison <- function(
   
   if (has_f1_stability) {
     plot_f1_stability_comparison <- ggplot(combined_data, aes(x = cell_type, y = f1_stability, fill = dataset)) +
-      geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+      geom_bar(stat = "identity", width = 0.85, position = position_dodge(width = 0.85, preserve = "single"), alpha = 0.8) +
       geom_text(aes(label = ifelse(!is.na(n_cells), paste0("n=", n_cells), ""), y = 0), 
-                position = position_dodge(width = 0.8), 
+                position = position_dodge(width = 0.85, preserve = "single"), 
                 vjust = 0.5, hjust = 0, size = 2.5, angle = 90) +
       { if (has_f1_error_bars) 
           geom_errorbar(aes(ymin = f1_stability - f1_stability_sd, ymax = f1_stability + f1_stability_sd),
-                        position = position_dodge(width = 0.8), width = 0.25, linewidth = 0.4)
+                        position = position_dodge(width = 0.85, preserve = "single"), width = 0.25, linewidth = 0.4)
       } +
       scale_fill_manual(values = dataset_colors, name = "Dataset") +
       labs(
@@ -383,10 +391,10 @@ plot_diagonal_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, n_runs_suffix, "_f1_stability_by_celltype_comparison.svg"),
       plot = plot_f1_stability_comparison,
-      width = 12, height = 8, units = "in"
+      width = 8.3, height = 5.85, units = "in"
     )
   } else {
     plot_f1_stability_comparison <- NULL
@@ -421,9 +429,10 @@ plot_diagonal_comparison <- function(
       # Filter and order like the main plot
       run_data_all <- run_data_all %>% filter(cell_type %in% final_levels)
       run_data_all$cell_type <- factor(run_data_all$cell_type, levels = final_levels)
+      run_data_all$dataset <- factor(run_data_all$dataset, levels = valid_datasets)
       
       p_run <- ggplot(run_data_all, aes(x = cell_type, y = stability, fill = dataset)) +
-        geom_bar(stat = "identity", position = position_dodge(width = 0.8), alpha = 0.8) +
+        geom_bar(stat = "identity", width = 0.85, position = position_dodge(width = 0.85, preserve = "single"), alpha = 0.8) +
         scale_fill_manual(values = dataset_colors, name = "Dataset") +
         labs(
           title = paste0("Stability by Cell Type - Run ", run_idx),
@@ -442,10 +451,10 @@ plot_diagonal_comparison <- function(
           plot.title = element_text(size = 15, face = "bold")
         )
       
-      ggsave(
+      ggplot2::ggsave(
         paste0(output_prefix, n_runs_suffix, "_stability_run_", run_idx, ".svg"),
         plot = p_run,
-        width = 12, height = 8, units = "in"
+        width = 8.3, height = 5.85, units = "in"
       )
       per_run_plots[[paste0("run_", run_idx)]] <- p_run
     }
@@ -530,7 +539,9 @@ plot_diagonal_comparison <- function(
 # a=plot_diagonal_comparison(list("Uchimura" = Uchimura_full_flow,
 #                                 "Freedman" = freedman_flow,
 #                                 "Cell Atlas" = cell_atlas_flow,
-#                                 "Takasato" = Takasato_full_flow),
-#                            output_prefix="six2gfp/7.5.26/negative_binomial/diagonal_comparison_"
+#                                 "Takasato" = Takasato_full_flow,
+#                                 "Vanslambrouck d13" = Vanslambrouck_d13_full_flow,
+#                                 "Vanslambrouck" = Vanslambrouck_full_flow),
+#                            output_prefix="six2gfp/7.5.26/diagonal_comparison_"
 # )
 

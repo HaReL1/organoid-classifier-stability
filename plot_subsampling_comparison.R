@@ -236,7 +236,7 @@ plot_subsampling_comparison <- function(
     )
   
   # Save plot 1
-  ggsave(
+  ggplot2::ggsave(
     paste0(output_prefix, "_pss_by_celltype_comparison.svg"),
     plot = plot_pss_comparison,
     width = 12, height = 8, units = "in"
@@ -276,7 +276,7 @@ plot_subsampling_comparison <- function(
     )
   
   # Save plot 2
-  ggsave(
+  ggplot2::ggsave(
     paste0(output_prefix, "_stability_by_celltype_comparison.svg"),
     plot = plot_stability_comparison,
     width = 12, height = 8, units = "in"
@@ -318,7 +318,7 @@ plot_subsampling_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, "_bi_stability_by_celltype_comparison.svg"),
       plot = plot_bi_stability_comparison,
       width = 12, height = 8, units = "in"
@@ -361,7 +361,7 @@ plot_subsampling_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, "_f1_stability_by_celltype_comparison.svg"),
       plot = plot_f1_stability_comparison,
       width = 12, height = 8, units = "in"
@@ -422,7 +422,7 @@ plot_subsampling_comparison <- function(
           plot.title = element_text(size = 15, face = "bold")
         )
       
-      ggsave(
+      ggplot2::ggsave(
         paste0(output_prefix, "_stability_run_", run_idx, ".svg"),
         plot = p_run,
         width = 12, height = 8, units = "in"
@@ -494,6 +494,102 @@ plot_subsampling_comparison <- function(
   
   stability_ranking <- compare_stability_ranking(combined_data, run_results_list)
   
+  # ===== Baseline-only Plots (Separate Square Files) =====
+  baseline_name <- names(run_results_list)[1]
+  baseline_data <- combined_data %>% filter(removed_group == baseline_name)
+  
+  # 1. Baseline PSS
+  p_base_pss <- ggplot(baseline_data, aes(x = cell_type, y = pss)) +
+    geom_bar(stat = "identity", fill = group_colors[baseline_name], alpha = 0.8) +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(title = paste0("Baseline PSS (", baseline_name, ")"), x = "Cell Type", y = "Prediction Specificity Score (PSS)") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+      axis.text.y = element_text(size = 12),
+      axis.title = element_text(size = 13),
+      plot.title = element_text(size = 15, face = "bold")
+    )
+  ggplot2::ggsave(
+    paste0(output_prefix, "_baseline_pss.svg"),
+    plot = p_base_pss,
+    width = 6, height = 6, units = "in"
+  )
+  
+  # 2. Baseline Stability
+  p_base_stability <- ggplot(baseline_data, aes(x = cell_type, y = stability)) +
+    geom_bar(stat = "identity", fill = group_colors[baseline_name], alpha = 0.8) +
+    { if (has_error_bars) 
+        geom_errorbar(aes(ymin = stability - stability_sd, ymax = stability + stability_sd),
+                      width = 0.25, linewidth = 0.4)
+    } +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(title = paste0("Baseline Stability (", baseline_name, ")"), x = "Cell Type", y = "Stability (Fraction of cells remaining same type)") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+      axis.text.y = element_text(size = 12),
+      axis.title = element_text(size = 13),
+      plot.title = element_text(size = 15, face = "bold")
+    )
+  ggplot2::ggsave(
+    paste0(output_prefix, "_baseline_stability.svg"),
+    plot = p_base_stability,
+    width = 6, height = 6, units = "in"
+  )
+  
+  # 3. Baseline Bi-directional Stability
+  has_bi_stability <- any(!is.na(baseline_data$bi_stability) & baseline_data$bi_stability != 0)
+  if (has_bi_stability) {
+    has_bi_error_bars <- any(!is.na(baseline_data$bi_stability_sd))
+    p_base_bi_stability <- ggplot(baseline_data, aes(x = cell_type, y = bi_stability)) +
+      geom_bar(stat = "identity", fill = group_colors[baseline_name], alpha = 0.8) +
+      { if (has_bi_error_bars) 
+          geom_errorbar(aes(ymin = bi_stability - bi_stability_sd, ymax = bi_stability + bi_stability_sd),
+                        width = 0.25, linewidth = 0.4)
+      } +
+      scale_y_continuous(limits = c(0, 1)) +
+      labs(title = paste0("Baseline Bi-directional Stability (", baseline_name, ")"), x = "Cell Type", y = "Bi-directional Stability") +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 13),
+        plot.title = element_text(size = 15, face = "bold")
+      )
+    ggplot2::ggsave(
+      paste0(output_prefix, "_baseline_bi_stability.svg"),
+      plot = p_base_bi_stability,
+      width = 6, height = 6, units = "in"
+    )
+  }
+  
+  # 4. Baseline F1 Stability
+  has_f1_stability <- any(!is.na(baseline_data$f1_stability) & baseline_data$f1_stability != 0)
+  if (has_f1_stability) {
+    has_f1_error_bars <- any(!is.na(baseline_data$f1_stability_sd))
+    p_base_f1_stability <- ggplot(baseline_data, aes(x = cell_type, y = f1_stability)) +
+      geom_bar(stat = "identity", fill = group_colors[baseline_name], alpha = 0.8) +
+      { if (has_f1_error_bars) 
+          geom_errorbar(aes(ymin = f1_stability - f1_stability_sd, ymax = f1_stability + f1_stability_sd),
+                        width = 0.25, linewidth = 0.4)
+      } +
+      scale_y_continuous(limits = c(0, 1)) +
+      labs(title = paste0("Baseline F1 Stability (", baseline_name, ")"), x = "Cell Type", y = "F1 Stability") +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 13),
+        plot.title = element_text(size = 15, face = "bold")
+      )
+    ggplot2::ggsave(
+      paste0(output_prefix, "_baseline_f1_stability.svg"),
+      plot = p_base_f1_stability,
+      width = 6, height = 6, units = "in"
+    )
+  }
+  
   # ===== Plot 5: Delta plots — change from baseline =====
   # If the first entry is a baseline, compute deltas for PSS, Stability, and Bi_Stability
   baseline_name <- names(run_results_list)[1]
@@ -536,7 +632,7 @@ plot_subsampling_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, "_pss_delta_vs_baseline.svg"),
       plot = plot_pss_delta,
       width = 12, height = 8, units = "in"
@@ -565,7 +661,7 @@ plot_subsampling_comparison <- function(
         plot.title = element_text(size = 15, face = "bold")
       )
     
-    ggsave(
+    ggplot2::ggsave(
       paste0(output_prefix, "_stability_delta_vs_baseline.svg"),
       plot = plot_stability_delta,
       width = 12, height = 8, units = "in"
@@ -595,7 +691,7 @@ plot_subsampling_comparison <- function(
           plot.title = element_text(size = 15, face = "bold")
         )
       
-      ggsave(
+      ggplot2::ggsave(
         paste0(output_prefix, "_bi_stability_delta_vs_baseline.svg"),
         plot = plot_bi_stability_delta,
         width = 12, height = 8, units = "in"
@@ -628,7 +724,7 @@ plot_subsampling_comparison <- function(
           plot.title = element_text(size = 15, face = "bold")
         )
       
-      ggsave(
+      ggplot2::ggsave(
         paste0(output_prefix, "_f1_stability_delta_vs_baseline.svg"),
         plot = plot_f1_stability_delta,
         width = 12, height = 8, units = "in"
@@ -716,7 +812,7 @@ plot_subsampling_comparison <- function(
         paired_plot <- p_top / p_bottom
         
         plot_filename <- paste0(paired_barplot_dir, clean_name, "_", mc$col, "_paired.svg")
-        ggsave(plot_filename, plot = paired_plot, width = 10, height = 10, units = "in")
+        ggplot2::ggsave(plot_filename, plot = paired_plot, width = 10, height = 10, units = "in")
         
         key <- paste0(removal_name, "_", mc$col)
         paired_barplot_list[[key]] <- paired_plot
@@ -727,9 +823,13 @@ plot_subsampling_comparison <- function(
     # Save combined PDF with all paired barplots
     if (length(all_paired_plots) > 0) {
       pdf_file <- paste0(output_prefix, "_paired_barplots_all.pdf")
-      pdf(pdf_file, width = 4, height = 6)
+      cairo_pdf(pdf_file, width = 10, height = 10, onefile = TRUE)
       for (p in all_paired_plots) {
-        print(p)
+        # Convert patchwork to a gtable grob before printing to avoid
+        # the custom ggsave wrapper from interfering with rendering
+        g <- patchwork::patchworkGrob(p)
+        grid::grid.newpage()
+        grid::grid.draw(g)
       }
       dev.off()
       message(paste0("Saved combined paired barplots PDF: ", pdf_file))

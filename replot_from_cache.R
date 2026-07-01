@@ -21,6 +21,7 @@
 source("FULL_FUNCTION.R")              # provides regenerate_plots_from_cache()
 source("plot_subsampling_comparison.R") # provides plot_subsampling_comparison()
 source("plot_diagonal_comparison.R")   # provides plot_diagonal_comparison()
+source("plot_marker_dotplots.R")       # provides plot_marker_dotplots()
 # source("plot_normalized_sum_vs_pss.R") # provides plot_normalized_sum_vs_pss()
 library(patchwork)                     # for combining plots into A4 layout
 
@@ -48,6 +49,8 @@ Uchimura_full_flow <- .load_rds("six2gfp/12.3.26/Uchimura_full_flow10noise.rds",
 freedman_flow      <- .load_rds("six2gfp/12.3.26/freedman_flow10noise.rds",        "freedman_flow")
 cell_atlas_flow    <- .load_rds("six2gfp/12.3.26/cell_atlas_flow10noise.rds",      "cell_atlas_flow")
 Takasato_full_flow <- .load_rds("six2gfp/12.3.26/Takasato_full_flow10noise.rds",   "Takasato_full_flow")
+Vanslambrouck_full_flow <- .load_rds("six2gfp/Vanslambrouck_full_flow10noise.rds", "Vanslambrouck_full_flow")
+Vanslambrouck_d13_full_flow <- .load_rds("six2gfp/Vanslambrouck_d13_full_flow10noise.rds", "Vanslambrouck_d13_full_flow")
 
 # -- Atlas subsampling: baseline --
 cell_atlas_flow
@@ -89,21 +92,23 @@ cat("===== Section 1: Regenerating main_plots =====\n")
 # output_prefix_base must match the directory used when the flow was first run.
 .main_flows <- list(
   list(cache  = "six2gfp/12.3.26/Uchimura_full_flow10noise.rds",
-       output = "six2gfp/new/Uchimura_noised/"),
+       output = "six2gfp/new/fixed_size/Uchimura_noised/"),
   list(cache  = "six2gfp/12.3.26/freedman_flow10noise.rds",
-       output = "six2gfp/new/freedman_not_clean/"),
+       output = "six2gfp/new/fixed_size/freedman_not_clean/"),
   list(cache  = "six2gfp/12.3.26/cell_atlas_flow10noise.rds",
-       output = "six2gfp/new/kidney_cell_atlas_clean_no_fibroblast/"),
+       output = "six2gfp/new/fixed_size/kidney_cell_atlas_clean_no_fibroblast/"),
   list(cache  = "six2gfp/12.3.26/Takasato_full_flow10noise.rds",
-       output = "six2gfp/new/Takasato_noised_tranpose/"),
-  list(cache  = "six2gfp/Vanslambrouck_noised/Vanslambrouck_full_flow10noise.rds",
-       output = "six2gfp/new/Vanslambrouck_noised/")
+       output = "six2gfp/new/fixed_size/Takasato_noised_tranpose/"),
+  list(cache  = "six2gfp/Vanslambrouck_full_flow10noise.rds",
+       output = "six2gfp/new/fixed_size/Vanslambrouck_noised/"),
+  list(cache  = "six2gfp/Vanslambrouck_d13_full_flow10noise.rds",
+       output = "six2gfp/new/fixed_size/Vanslambrouck_d13_noised/")
 )
 
-.main_flows <- list(
-  list(cache  = "six2gfp/12.3.26/cell_atlas_flow10noise.rds",
-       output = "six2gfp/new/kidney_cell_atlas_clean/")
-)
+# .main_flows <- list(
+#   list(cache  = "six2gfp/12.3.26/cell_atlas_flow10noise.rds",
+#        output = "six2gfp/new/kidney_cell_atlas_clean/")
+# )
 
 for (.entry in .main_flows) {
   cat(sprintf("\n  -> %s\n", .entry$cache))
@@ -215,10 +220,12 @@ cat("===== Section 3: Diagonal comparison =====\n")
 
 # Only include datasets whose cache loaded successfully
 .diag_list <- list()
-if (!is.null(Uchimura_full_flow))  .diag_list[["Uchimura"]]   <- Uchimura_full_flow
-if (!is.null(freedman_flow))       .diag_list[["Freedman"]]   <- freedman_flow
 if (!is.null(cell_atlas_flow))     .diag_list[["Cell Atlas"]] <- cell_atlas_flow
 if (!is.null(Takasato_full_flow))  .diag_list[["Takasato"]]   <- Takasato_full_flow
+if (!is.null(Uchimura_full_flow))  .diag_list[["Uchimura"]]   <- Uchimura_full_flow
+if (!is.null(freedman_flow))       .diag_list[["Harder"]]   <- freedman_flow # Freedman is Harder's paperW
+if (!is.null(Vanslambrouck_d13_full_flow)) .diag_list[["Vanslambrouck d13"]] <- Vanslambrouck_d13_full_flow
+if (!is.null(Vanslambrouck_full_flow)) .diag_list[["Vanslambrouck"]] <- Vanslambrouck_full_flow
 
 if (length(.diag_list) < 2) {
   warning("Need at least 2 datasets for diagonal comparison — check caches above.")
@@ -230,4 +237,24 @@ if (length(.diag_list) < 2) {
 }
 
 cat("\n===== Section 3 complete =====\n")
+
+# =============================================================================
+# Section 4: Marker Gene DotPlots (Optional)
+# =============================================================================
+# Calls plot_marker_dotplots() to generate dotplots showing expression of 
+# top marker genes for each cell type in each dataset.
+# 
+# Uncomment the code below to run it. Note: FindAllMarkers can take a while.
+# =============================================================================
+
+# cat("\n===== Section 4: Marker DotPlots =====\n")
+# if (length(.diag_list) > 0) {
+#   marker_dotplots <- plot_marker_dotplots(
+#     .diag_list,
+#     output_prefix = "six2gfp/new/dotplots/",
+#     n_markers = 3 # Top 3 markers per cell type
+#   )
+# }
+# cat("\n===== Section 4 complete =====\n")
+
 cat("\n===== replot_from_cache.R: ALL DONE =====\n")
