@@ -247,14 +247,50 @@ cat("\n===== Section 3 complete =====\n")
 # Uncomment the code below to run it. Note: FindAllMarkers can take a while.
 # =============================================================================
 
-# cat("\n===== Section 4: Marker DotPlots =====\n")
-# if (length(.diag_list) > 0) {
-#   marker_dotplots <- plot_marker_dotplots(
-#     .diag_list,
-#     output_prefix = "six2gfp/new/dotplots/",
-#     n_markers = 3 # Top 3 markers per cell type
-#   )
-# }
-# cat("\n===== Section 4 complete =====\n")
+cat("\n===== Section 4: Marker DotPlots =====\n")
+if (length(.diag_list) > 0) {
+  # cache_paths maps each dataset name (from .diag_list) to the _cache/ directory
+  # where run_without_noise.rds was saved during the original analysis run.
+  # These must match the output_prefix_base values used in use_FULL_FUNCTION.R.
+  .dotplot_cache_paths <- list(
+    "Cell Atlas"       = "six2gfp/12.3.26/kidney_cell_atlas_clean_no_fibroblast/_cache",
+    "Takasato"         = "six2gfp/12.3.26/Takasato_noised_tranpose/_cache",
+    "Uchimura"         = "six2gfp/12.3.26/Uchimura_noised/_cache",
+    "Harder"           = "six2gfp/12.3.26/freedman_not_clean/_cache",
+    "Vanslambrouck d13" = "six2gfp/Vanslambrouck_d13_noised/_cache",
+    "Vanslambrouck"    = "six2gfp/Vanslambrouck_noised/_cache"
+  )
+  
+  # Load original Six2GFP and add it to the list
+  if (file.exists("six2gfp/six2gfp_seurat_full")) {
+    cat("  -- Loading original Six2GFP dataset --\n")
+    six_env <- new.env()
+    load("six2gfp/six2gfp_seurat_full", envir = six_env) # /lab/six2gfp/SIX2GFP_as_ground.R
+
+    # When only that needed, uncomment: 
+    # .diag_list = c(list("Original Six2GFP" = list(test = six2gfp_seurat)))
+    # .dotplot_cache_paths <- c(list("Original Six2GFP" = NULL))
+    
+    # Add to beginning of .diag_list
+    .diag_list <- c(list("Original Six2GFP" = list(test = six2gfp_merged)), .diag_list)
+    .dotplot_cache_paths <- c(list("Original Six2GFP" = NULL), .dotplot_cache_paths)
+  }
+  
+  cat("\n  -- Method 1: Dynamic Top Markers --\n")
+  marker_dotplots_dynamic <- plot_marker_dotplots(
+    .diag_list,
+    output_prefix = "six2gfp/new/dotplots_dynamic/",
+    n_markers = 3, # Top 3 markers per cell type
+    cache_paths = .dotplot_cache_paths
+  )
+  
+  cat("\n  -- Method 2: Hardcoded Marker List --\n")
+  marker_dotplots_hardcoded <- plot_hardcoded_marker_dotplots(
+    .diag_list,
+    output_prefix = "six2gfp/new/dotplots_hardcoded/",
+    cache_paths = .dotplot_cache_paths
+  )
+}
+cat("\n===== Section 4 complete =====\n")
 
 cat("\n===== replot_from_cache.R: ALL DONE =====\n")

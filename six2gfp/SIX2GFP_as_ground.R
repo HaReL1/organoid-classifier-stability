@@ -41,6 +41,7 @@ ElbowPlot(six2gfp_seurat, ndims = 30)
 six2gfp_seurat <- FindNeighbors(six2gfp_seurat, dims = 1:15)
 six2gfp_seurat <- FindClusters(six2gfp_seurat)
 six2gfp_seurat <- RunUMAP(six2gfp_seurat, dims = 1:15, return.model = TRUE)
+save(six2gfp_seurat, file = "six2gfp/six2gfp_seurat_full")
 DimPlot(six2gfp_seurat, reduction = "umap", group.by="type", label = TRUE, label.size = 3)
 # train-test ####
 # split to train-test

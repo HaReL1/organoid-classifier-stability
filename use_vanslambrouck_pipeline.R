@@ -5,7 +5,7 @@ source("FULL_FUNCTION.R")
 load(file = "six2gfp/train_Six2GFP")
 load(file = "six2gfp/test_Six2GFP")
 
-# 2. Read the Vanslambrouck data
+# 2. Read the Vanslambrouck data D13+14
 # Note: We are using ReadMtx because the raw 10X files have a custom prefix ("GSM5600483_ML204060_").
 # The Read10X function expects the files to be named exactly "matrix.mtx.gz", "features.tsv.gz", and "barcodes.tsv.gz".
 # ReadMtx works exactly the same way but allows us to specify the exact file names.
