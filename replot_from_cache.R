@@ -102,7 +102,10 @@ cat("===== Section 1: Regenerating main_plots =====\n")
   list(cache  = "six2gfp/Vanslambrouck_full_flow10noise.rds",
        output = "six2gfp/new/fixed_size/Vanslambrouck_noised/"),
   list(cache  = "six2gfp/Vanslambrouck_d13_full_flow10noise.rds",
-       output = "six2gfp/new/fixed_size/Vanslambrouck_d13_noised/")
+       output = "six2gfp/new/fixed_size/Vanslambrouck_d13_noised/"),
+  # -- Human-to-Human flows --
+  list(cache  = "human_to_human/Uchimura_full_flow5noise.rds",
+       output = "human_to_human/new/Uchimura_noised/")
 )
 
 # .main_flows <- list(

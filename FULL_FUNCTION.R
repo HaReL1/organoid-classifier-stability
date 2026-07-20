@@ -21,7 +21,8 @@ library(grid)
 # overall file dimensions automatically adjust to accommodate varying text/legends.
 # ============================================================================
 ggsave <- function(filename, plot = last_plot(), width = NA, height = NA, units = c("in", "cm", "mm", "px"), ...) {
-  if (inherits(plot, "ggplot") || inherits(plot, "patchwork")) {
+  # Do not apply the single-panel sizing to patchwork objects as it breaks their internal grid layout
+  if (inherits(plot, "ggplot") && !inherits(plot, "patchwork")) {
     g <- ggplot2::ggplotGrob(plot)
     panels <- grep("panel", g$layout$name)
     if (length(panels) > 0) {
@@ -394,12 +395,68 @@ analyze_noise_impact_on_prediction <- function(
     
     # Consistent Order in Heatmaps - Get cell type order from training data
     cell_type_order <- unique(train_labeled_seurat[[ref_cell_type_column]])[[ref_cell_type_column]]
-    cell_type_order = factor(cell_type_order, levels = c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","MACROPHAG","ENDO"))
-    cell_type_order = cell_type_order[order(match(cell_type_order, levels(cell_type_order)))]
+    six2gfp_levels <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","MACROPHAG","ENDO")
+    if (any(cell_type_order %in% six2gfp_levels)) {
+      # SIX2GFP reference: use hardcoded order
+      cell_type_order = factor(cell_type_order, levels = six2gfp_levels)
+      cell_type_order = cell_type_order[order(match(cell_type_order, levels(cell_type_order)))]
+    } else {
+      # Non-SIX2GFP reference: check for human cell atlas types
+      atlas_levels <- c(
+        # Nephron Lineage
+        "Cap mesenchyme", "Proliferating cap mesenchyme",
+        "Proximal renal vesicle", "Distal renal vesicle", "Proliferating distal renal vesicle",
+        "Proximal S shaped body", "Medial S shaped body", "Distal S shaped body",
+        "Podocyte", "Proximal tubule", "Loop of Henle",
+        
+        # Ureteric Bud / Collecting Duct
+        "Proximal UB", "CNT/PC - proximal UB", "Pelvic epithelium - distal UB",
+        
+        # Stroma / Fibroblasts
+        "Stroma progenitor", "Proliferating stroma progenitor",
+        "Fibroblast 1", "Fibroblast 2",
+        "Myofibroblast 1", "Myofibroblast 2", "Proliferating myofibroblast",
+        
+        # Endothelial
+        "Endothelium",
+        
+        # Immune - Myeloid
+        "Macrophage 1", "Macrophage 2", "Proliferating macrophage",
+        "Monocyte", "Proliferating monocyte", "Mast cells",
+        "cDC1", "cDC2", "pDC", "Neutrophil",
+        
+        # Immune - Lymphoid
+        "B cell", "Proliferating B cell", "CD4 T cell", "CD8 T cell", "NK cell", "Innate like lymphocyte",
+        
+        # Other
+        "Erythroid", "Megakaryocyte", "Neuron"
+      )
+      if (any(cell_type_order %in% atlas_levels)) {
+        # Combine found atlas levels in the specified order with any other unknown cell types at the end
+        found_levels <- atlas_levels[atlas_levels %in% cell_type_order]
+        other_levels <- sort(setdiff(cell_type_order, atlas_levels))
+        cell_type_order = factor(cell_type_order, levels = c(found_levels, other_levels))
+        cell_type_order = cell_type_order[order(match(cell_type_order, levels(cell_type_order)))]
+        cell_type_order = cell_type_order[!is.na(cell_type_order)]
+      } else {
+        # Unknown reference: fall back to sorted order
+        cell_type_order = sort(unique(cell_type_order))
+      }
+    }
     if (is.null(myColors)) {
-      # Use the fixed global palette so colors are consistent across plots
-      # with different numbers of groups (subset of the full 10-type palette).
-      myColors <- CELL_TYPE_COLORS
+      if (any(cell_type_order %in% six2gfp_levels)) {
+        # Use the fixed global palette so colors are consistent across plots
+        # with different numbers of groups (subset of the full 10-type palette).
+        myColors <- CELL_TYPE_COLORS
+      } else {
+        # Non-SIX2GFP reference: generate a palette from Paired or hue_pal
+        n_types <- length(cell_type_order)
+        if (n_types <= 12) {
+          myColors <- setNames(brewer.pal(max(n_types, 3), "Paired")[1:n_types], cell_type_order)
+        } else {
+          myColors <- setNames(scales::hue_pal()(n_types), cell_type_order)
+        }
+      }
     }
     
     if (is.null(colors_for_feature)) {
@@ -472,7 +529,7 @@ analyze_noise_impact_on_prediction <- function(
       colnames(pairwise_confusion) <- row.names(pairwise_confusion)
       
       # 1. Consistent Order in Heatmaps - Reorder matrix rows and cols
-      pairwise_confusion <- pairwise_confusion[cell_type_order, cell_type_order]
+      pairwise_confusion <- pairwise_confusion[gsub("-", "_", cell_type_order), gsub("-", "_", cell_type_order)]
       
       for (i in 1:num_classes) {
         for (j in 1:num_classes) {
@@ -578,16 +635,17 @@ analyze_noise_impact_on_prediction <- function(
     # if there is an original plot from first projection
     if (!is.null(plot_on_this_UMAP)) {
       
-      current_cells=names(test_query$predicted.type)
+      pred_col <- paste0("predicted.", ref_cell_type_column)
+      current_cells=names(test_query@meta.data[[pred_col]])
       
-      if ("predicted.type" %in% colnames(plot_on_this_UMAP@meta.data)) {
+      if (pred_col %in% colnames(plot_on_this_UMAP@meta.data)) {
         if(!is.null(plot_on_this_UMAP@reductions$ref.umap))
         { reduction='ref.umap' } else { reduction='umap' }
         
         p1 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                      label.size = 3, repel = FALSE) + ggtitle("original") +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         
         # change the prediction according to this run
         plot_on_this_UMAP[[prediction_column_name]][current_cells]=test_query[[paste0("predicted.",ref_cell_type_column)]]
@@ -595,11 +653,11 @@ analyze_noise_impact_on_prediction <- function(
         p2 = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                      group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                      label.size = 3, repel = FALSE) + ggtitle("new iteration") +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         p2_alone = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                 group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                 label.size = 5, repel = FALSE) + theme(legend.position = "none") +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
@@ -611,7 +669,7 @@ analyze_noise_impact_on_prediction <- function(
         p2_alone_with_legend = DimPlot(plot_on_this_UMAP, cells=current_cells, reduction = reduction,
                 group.by = paste0("predicted.",ref_cell_type_column), label = TRUE,
                 label.size = 5, repel = FALSE) +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         ggsave(paste0(output_prefix, "_original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
                width = 10, height = 8, units = "in")
         
@@ -620,28 +678,28 @@ analyze_noise_impact_on_prediction <- function(
       else {
         p1 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE,
                      label.size = 3, repel = FALSE) +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         
         
-        plot_on_this_UMAP=AddMetaData(plot_on_this_UMAP,test_query$predicted.type,col.name = "predicted.type")
-        p2 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
+        plot_on_this_UMAP=AddMetaData(plot_on_this_UMAP,test_query@meta.data[[pred_col]],col.name = pred_col)
+        p2 = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = pred_col,
                      label.size = 8, repel = FALSE) +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         
         combined_original_view_plot <- p1+p2
         ggsave(paste0(output_prefix, "_original_view_vs_iter.svg"), plot = combined_original_view_plot,
                width = 16, height = 9, units = "in")
         
-        p2_alone = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
+        p2_alone = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = pred_col,
                            label.size = 5, repel = FALSE) + theme(legend.position = "none") +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         
         ggsave(paste0(output_prefix, "_original_view_only_prediction_A.svg"), plot = p2_alone,
                width = 8, height = 8, units = "in")
                
-        p2_alone_with_legend = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = "predicted.type",
+        p2_alone_with_legend = DimPlot(plot_on_this_UMAP, reduction = "umap", label = TRUE, group.by = pred_col,
                            label.size = 5, repel = FALSE) +
-          scale_color_manual(values = CELL_TYPE_COLORS)
+          scale_color_manual(values = myColors)
         ggsave(paste0(output_prefix, "_original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
                width = 10, height = 8, units = "in")
         
@@ -717,6 +775,7 @@ analyze_noise_impact_on_prediction <- function(
   }
   # initial_test_query = temp_seurat_obj[["test"]] # save initial test_query object
   main_cell_type_order <- temp_seurat_obj[["cell_type_order"]] # Capture cell_type_order
+  main_cell_type_order <- gsub("-", "_", main_cell_type_order) # Normalize names to match prediction score rownames
   
   # 3. Run noise noised_number times and keep relevant data ####
   noised_prediction = matrix('0', nrow = ncol(seurat_obj), ncol = noised_number+1)
@@ -759,6 +818,8 @@ analyze_noise_impact_on_prediction <- function(
       noised_anchors_list[[paste0("iter",k)]] = results_noised$test_anchors
     }
   }
+  # Normalize all prediction values to match gsub'd names used in JSD/PSS matrices
+  noised_prediction[,] <- gsub("-", "_", noised_prediction)
   
   # 4. Check data: count changes ####
   count_changes = apply(noised_prediction, 1, function(row) {
@@ -820,7 +881,7 @@ analyze_noise_impact_on_prediction <- function(
     return(entropy_by_cell)
   }
   
-  prediction_data = temp_seurat_obj[["test"]]@assays[["prediction.score.type"]]@data # Use original prediction
+  prediction_data = temp_seurat_obj[["test"]]@assays[[paste0("prediction.score.",ref_cell_type_column)]]@data # Use original prediction
   rownames(prediction_data)=gsub("-", "_", rownames(prediction_data))
   # P^R, i
   norm_p_factor = rowSums(prediction_data)
@@ -828,7 +889,7 @@ analyze_noise_impact_on_prediction <- function(
   # P^C, j
   # prediction_data = results_noised[["test"]]@assays[["prediction.score.type"]]@data # Use the last noised result
   # rownames(prediction_data)=gsub("-", "_", rownames(prediction_data))
-  predicted_zeroes_mat <- (sapply(temp_seurat_obj[["test"]]@meta.data[["predicted.type"]], function(x) rownames(prediction_data) == x) * 1)
+  predicted_zeroes_mat <- (sapply(temp_seurat_obj[["test"]]@meta.data[[prediction_column_name]], function(x) rownames(prediction_data) == gsub("-", "_", x)) * 1)
   dimnames(predicted_zeroes_mat) = dimnames(prediction_data)
   norm_one_hot_factor = rowSums(predicted_zeroes_mat)
   norm_one_hot = sweep(predicted_zeroes_mat, 1, norm_one_hot_factor, FUN = "/")
@@ -957,7 +1018,8 @@ analyze_noise_impact_on_prediction <- function(
     f1_stability_per_run = f1_stability_per_run,
     seurat_noised_prediction_list = seurat_noised_prediction_list,
     initial_anchors = temp_seurat_obj$test_anchors,
-    noised_anchors = noised_anchors_list
+    noised_anchors = noised_anchors_list,
+    main_cell_type_order = main_cell_type_order
   ))
 }
 
@@ -1424,9 +1486,11 @@ plot_change_feature <- function(seurat_obj, change_counts_df, colors_feature_plo
 }
 
 plot_noised_predictions_original_view <- function(seurat_obj, temp_seurat_obj, results_noised, output_prefix_base) {
-  prediction_data_original = temp_seurat_obj[["test"]]@assays[["prediction.score.type"]]@data
+  assay_names <- names(temp_seurat_obj[["test"]]@assays)
+  pred_assay <- assay_names[grepl("^prediction\\.score\\.", assay_names)][1]
+  prediction_data_original = temp_seurat_obj[["test"]]@assays[[pred_assay]]@data
   rownames(prediction_data_original)=gsub("-", "_", rownames(prediction_data_original))
-  prediction_data = results_noised[["test"]]@assays[["prediction.score.type"]]@data
+  prediction_data = results_noised[["test"]]@assays[[pred_assay]]@data
   rownames(prediction_data)=gsub("-", "_", rownames(prediction_data))
   
   all_cell_types <- intersect(rownames(prediction_data), rownames(prediction_data_original))
@@ -1514,44 +1578,66 @@ plot_seurat_dependent_plots_from_cache <- function(cache_path, change_counts_df,
   temp_seurat_obj <- readRDS(run_without_noise_path)
   test_query <- temp_seurat_obj[["test"]]
   
-  current_cells <- names(test_query$predicted.type)
+  pred_col <- names(test_query@meta.data)[grepl("^predicted\\.", names(test_query@meta.data))][1]
+  
+  current_cells <- names(test_query@meta.data[[pred_col]])
   if (is.null(current_cells)) current_cells <- colnames(test_query)
   
+  # Reconstruct myColors
+  cell_type_order <- if (!is.null(temp_seurat_obj[["cell_type_order"]])) {
+    levels(temp_seurat_obj[["cell_type_order"]])
+  } else {
+    sort(unique(test_query[[pred_col]][[pred_col]]))
+  }
+  if (is.null(cell_type_order)) cell_type_order <- sort(unique(test_query[[pred_col]][[pred_col]]))
+  
+  six2gfp_levels <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD","MACROPHAG","ENDO")
+  if (any(cell_type_order %in% six2gfp_levels)) {
+    myColors <- CELL_TYPE_COLORS
+  } else {
+    n_types <- length(cell_type_order)
+    if (n_types <= 12) {
+      myColors <- setNames(brewer.pal(max(n_types, 3), "Paired")[1:n_types], cell_type_order)
+    } else {
+      myColors <- setNames(scales::hue_pal()(n_types), cell_type_order)
+    }
+  }
+
   # 1. DimPlots
-  if ("predicted.type" %in% colnames(seurat_obj@meta.data)) {
+  if (pred_col %in% colnames(seurat_obj@meta.data)) {
     if(!is.null(seurat_obj@reductions$ref.umap)) { 
       reduction <- 'ref.umap' 
     } else { 
       reduction <- 'umap' 
     }
     
-    seurat_obj[["predicted.type"]][current_cells] <- test_query[["predicted.type"]]
+    seurat_obj[[pred_col]][current_cells] <- test_query[[pred_col]]
     
     p2_alone = DimPlot(seurat_obj, cells=current_cells, reduction = reduction,
-                       group.by = "predicted.type", label = TRUE,
+                       group.by = pred_col, label = TRUE,
                        label.size = 5, repel = FALSE) + theme(legend.position = "none") +
-      scale_color_manual(values = CELL_TYPE_COLORS)
+      scale_color_manual(values = myColors)
     ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A.svg"), plot = p2_alone,
            width = 8, height = 8, units = "in")
            
     p2_alone_with_legend = DimPlot(seurat_obj, cells=current_cells, reduction = reduction,
-                       group.by = "predicted.type", label = TRUE,
+                       group.by = pred_col, label = TRUE,
                        label.size = 5, repel = FALSE) +
-      scale_color_manual(values = CELL_TYPE_COLORS)
+      scale_color_manual(values = myColors)
     ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
            width = 10, height = 8, units = "in")
            
   } else {
-    seurat_obj <- AddMetaData(seurat_obj, test_query$predicted.type, col.name = "predicted.type")
-    p2_alone = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = "predicted.type",
+    seurat_obj <- AddMetaData(seurat_obj, test_query@meta.data[[pred_col]], col.name = pred_col)
+    p2_alone = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = pred_col,
                        label.size = 5, repel = FALSE) + theme(legend.position = "none") +
-      scale_color_manual(values = CELL_TYPE_COLORS)
+      scale_color_manual(values = myColors)
     ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A.svg"), plot = p2_alone,
            width = 8, height = 8, units = "in")
            
-    p2_alone_with_legend = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = "predicted.type",
+    p2_alone_with_legend = DimPlot(seurat_obj, reduction = "umap", label = TRUE, group.by = pred_col,
                        label.size = 5, repel = FALSE) +
-      scale_color_manual(values = CELL_TYPE_COLORS)
+      scale_color_manual(values = myColors)
     ggsave(paste0(output_prefix_base, "0_silent__original_view_only_prediction_A_with_legend.svg"), plot = p2_alone_with_legend,
            width = 10, height = 8, units = "in")
   }
@@ -1595,10 +1681,42 @@ regenerate_plots_from_cache <- function(cache_path, min_cell_count_for_type = 3,
       return()
   }
   
-  main_cell_type_order <- factor(
-    c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "MACROPHAG", "ENDO"), 
-    levels = c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "MACROPHAG", "ENDO")
-  )
+  # Detect cell type order: use cached value if present, otherwise infer from data
+  if (!is.null(data$main_cell_type_order)) {
+    main_cell_type_order <- data$main_cell_type_order
+  } else {
+    # Infer from the matrices — fall back to rownames of JSD/PSS matrix or unique prediction values
+    six2gfp_levels <- c("UM", "CM", "CM_DIV", "PODO", "PROX_1", "PROX_2", "LOH", "DIST_CD", "MACROPHAG", "ENDO")
+    candidate_types <- if (!is.null(JSD_mat)) rownames(JSD_mat) else rownames(RSS_mat_filtered)
+    if (any(candidate_types %in% six2gfp_levels)) {
+      main_cell_type_order <- factor(six2gfp_levels, levels = six2gfp_levels)
+    } else {
+      # Non-SIX2GFP: use atlas ordering for known types, append any others sorted
+      atlas_levels <- gsub("-", "_", c(
+        "Cap mesenchyme", "Proliferating cap mesenchyme",
+        "Proximal renal vesicle", "Distal renal vesicle", "Proliferating distal renal vesicle",
+        "Proximal S shaped body", "Medial S shaped body", "Distal S shaped body",
+        "Podocyte", "Proximal tubule", "Loop of Henle",
+        "Proximal UB", "CNT/PC - proximal UB", "Pelvic epithelium - distal UB",
+        "Stroma progenitor", "Proliferating stroma progenitor",
+        "Fibroblast 1", "Fibroblast 2",
+        "Myofibroblast 1", "Myofibroblast 2", "Proliferating myofibroblast",
+        "Endothelium",
+        "Macrophage 1", "Macrophage 2", "Proliferating macrophage",
+        "Monocyte", "Proliferating monocyte", "Mast cells",
+        "cDC1", "cDC2", "pDC", "Neutrophil",
+        "B cell", "Proliferating B cell", "CD4 T cell", "CD8 T cell", "NK cell", "Innate like lymphocyte",
+        "Erythroid", "Megakaryocyte", "Neuron"
+      ))
+      found <- atlas_levels[atlas_levels %in% candidate_types]
+      other <- sort(setdiff(candidate_types, atlas_levels))
+      ordered_types <- c(found, other)
+      main_cell_type_order <- factor(ordered_types, levels = ordered_types)
+    }
+  }
+  
+  # Normalize noised_prediction names to match gsub'd convention
+  noised_prediction[,] <- gsub("-", "_", noised_prediction)
   
   conf_matrix <- table(Original = noised_prediction[,1],
                        New = noised_prediction[,ncol(noised_prediction)])
