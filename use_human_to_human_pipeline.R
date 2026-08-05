@@ -232,3 +232,16 @@ if (file.exists(cache_h2h_Uchimura)) {
 #   )
 #   saveRDS(h2h_atlas_self_flow, cache_h2h_atlas_self)
 # }
+
+# =============================================================================
+# 8. Plot Baseline Diagonal Comparison
+# =============================================================================
+source("plot_diagonal_comparison.R")
+
+# Create a baseline plot for the human-to-human pipeline using Uchimura flow.
+# desired_order = NULL ensures we don't filter out human cell types using the default mouse cell types.
+diagonal_plots <- plot_diagonal_comparison(
+  run_results_list = list("Human-to-Human Baseline" = h2h_Uchimura_flow),
+  output_prefix = "human_to_human/baseline_diagonal_",
+  desired_order = NULL
+)

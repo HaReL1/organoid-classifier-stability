@@ -33,7 +33,8 @@ plot_diagonal_comparison <- function(
     output_prefix = "diagonal_comparison",
     plot_title_pss = "PSS Self-Similarity Across Datasets",
     plot_title_stability = "Stability Across Datasets",
-    n_runs_override = NULL  # optionally force n_runs label (auto-detected if NULL)
+    n_runs_override = NULL,  # optionally force n_runs label (auto-detected if NULL)
+    desired_order = c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD")
 ) {
   
   # Validate input
@@ -198,13 +199,16 @@ plot_diagonal_comparison <- function(
       filter(cell_type %in% common_cell_types)
 
   # Enforce specific order for cell types
-  desired_order <- c("UM","CM","CM_DIV","PODO","PROX_1","PROX_2","LOH","DIST_CD") # ENDO & MACROPHAG removed
-  # Retrieve intersection of desired order and available (common) types to avoid NA levels
-  final_levels <- intersect(desired_order, common_cell_types)
-  
-  if (length(final_levels) < length(common_cell_types)) {
-      warning("Some common cell types are missing from the manual ordering list and will be excluded from the plot.")
-      combined_data <- combined_data %>% filter(cell_type %in% final_levels)
+  if (!is.null(desired_order)) {
+    # Retrieve intersection of desired order and available (common) types to avoid NA levels
+    final_levels <- intersect(desired_order, common_cell_types)
+    
+    if (length(final_levels) < length(common_cell_types)) {
+        warning("Some common cell types are missing from the manual ordering list and will be excluded from the plot.")
+        combined_data <- combined_data %>% filter(cell_type %in% final_levels)
+    }
+  } else {
+    final_levels <- common_cell_types
   }
 
   combined_data$cell_type <- factor(combined_data$cell_type, levels = final_levels)
