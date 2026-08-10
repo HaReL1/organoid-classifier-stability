@@ -62,6 +62,8 @@
 #             keep.scale = "all") # Mes prog
 # FeaturePlot(seurat_Uchimura_Humphreys_20, reduction = "umap", features = "MKI67",
 #             keep.scale = "all") # Mes
+FeaturePlot(seurat_Uchimura_Humphreys_20, reduction = "umap", features = "CDH11", keep.scale = "all")
+FeaturePlot(seurat_Uchimura_Humphreys_20, reduction = "umap", features = "PAX2", keep.scale = "all") 
 
 
 # now: mapquery from six2gfp

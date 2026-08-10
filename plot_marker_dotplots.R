@@ -14,7 +14,9 @@ library(dplyr)
 #' @return A list of ggplot DotPlot objects
 plot_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/dotplots/", 
                                  n_markers = 3, cell_type_column = "predicted.type",
-                                 genes_to_plot = NULL, cache_paths = NULL) {
+                                 genes_to_plot = NULL, cache_paths = NULL,
+                                 legend_position = "bottom",
+                                 combine_plots = TRUE) {
   
   if (!dir.exists(output_prefix)) {
     dir.create(output_prefix, recursive = TRUE, showWarnings = FALSE)
@@ -29,8 +31,13 @@ plot_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/
     print(paste("Generating DotPlot for dataset:", run_name))
     run_result <- run_results_list[[run_name]]
     
-    # We use the 'test' Seurat object, which contains the predictions
-    seurat_obj <- run_result$test
+    # Extract Seurat object (either directly or from run_result$test)
+    seurat_obj <- NULL
+    if (is.list(run_result) && !is.null(run_result$test)) {
+      seurat_obj <- run_result$test
+    } else if (inherits(run_result, "Seurat") || class(run_result)[1] == "Seurat") {
+      seurat_obj <- run_result
+    }
     if (is.null(seurat_obj) && !is.null(cache_paths[[run_name]])) {
       cache_file <- file.path(cache_paths[[run_name]], "run_without_noise.rds")
       if (file.exists(cache_file)) {
@@ -97,17 +104,22 @@ plot_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/
       next
     }
     
+    target_genes <- plot_genes
+    
     # Check which genes are actually in the dataset
-    plot_genes <- intersect(plot_genes, rownames(seurat_obj))
-    if (length(plot_genes) == 0) {
+    present_genes <- intersect(target_genes, rownames(seurat_obj))
+    if (length(present_genes) == 0) {
       warning(paste("None of the specified genes were found in the dataset", run_name))
       next
     }
     
     # Generate DotPlot
     # By default, DotPlot puts features on X and idents on Y. We use coord_flip() 
-    # to match the standard look (groups on X, genes on Y)
-    p <- DotPlot(seurat_obj, features = plot_genes, group.by = cell_type_column) + 
+    # to match the standard look (groups on X, genes on Y).
+    # scale_x_discrete(limits = target_genes, drop = FALSE) guarantees all plots
+    # maintain identical Y-axis gene alignment, even if a gene is missing in some datasets.
+    p <- DotPlot(seurat_obj, features = present_genes, group.by = cell_type_column) + 
+      scale_x_discrete(limits = target_genes, drop = FALSE) +
       coord_flip() +
       theme_minimal() +
       theme(
@@ -116,20 +128,78 @@ plot_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/
         axis.title = element_blank(),
         plot.title = element_text(size = 14, face = "bold"),
         panel.grid.major = element_line(color = "grey90"),
-        panel.border = element_rect(color = "black", fill = NA)
+        panel.border = element_rect(color = "black", fill = NA),
+        legend.position = legend_position,
+        legend.box = "horizontal",
+        legend.direction = "horizontal",
+        legend.title = element_text(size = 10, face = "bold"),
+        legend.text = element_text(size = 9),
+        legend.margin = margin(t = 10, r = 0, b = 0, l = 0)
       ) +
       labs(title = paste("Marker Genes -", run_name)) +
       scale_color_gradient(low = "lightgrey", high = "red")
       
+    if (legend_position == "bottom") {
+      p <- p + guides(
+        color = guide_colorbar(
+          title = "Average Expression", 
+          title.position = "top", 
+          title.hjust = 0.5,
+          barwidth = unit(2.5, "in"), 
+          barheight = unit(0.35, "cm")
+        ),
+        size = guide_legend(
+          title = "Percent Expressed", 
+          title.position = "top", 
+          title.hjust = 0.5
+        )
+      )
+    }
+      
     # Dynamic sizing based on number of genes and cell types
     plot_width <- max(6, length(available_levels) * 0.4 + 2)
-    plot_height <- max(5, length(plot_genes) * 0.15 + 2)
+    plot_height <- max(5, length(plot_genes) * 0.15 + (if (legend_position == "bottom") 2.5 else 1.5))
     
-    out_file <- paste0(output_prefix, gsub(" ", "_", run_name), "_dotplot.svg")
-    ggsave(out_file, plot = p, width = plot_width, height = plot_height, units = "in")
+    out_file_svg <- paste0(output_prefix, gsub(" ", "_", run_name), "_dotplot.svg")
+    out_file_png <- paste0(output_prefix, gsub(" ", "_", run_name), "_dotplot.png")
+    
+    ggsave(out_file_svg, plot = p, width = plot_width, height = plot_height, units = "in")
+    ggsave(out_file_png, plot = p, width = plot_width, height = plot_height, units = "in", dpi = 300)
     
     plot_list[[run_name]] <- p
-    print(paste("Saved DotPlot to", out_file))
+    print(paste("Saved DotPlot to", out_file_svg, "and", out_file_png))
+  }
+  
+  # Combine plots side-by-side with shared legend if multiple plots
+  if (combine_plots && length(plot_list) > 1) {
+    if (requireNamespace("patchwork", quietly = TRUE)) {
+      combined_plot <- patchwork::wrap_plots(plot_list, nrow = 1) + 
+        patchwork::plot_layout(guides = "collect") & 
+        theme(
+          legend.position = legend_position,
+          legend.box = "horizontal",
+          legend.direction = "horizontal",
+          legend.title = element_text(size = 10, face = "bold"),
+          legend.text = element_text(size = 9)
+        )
+      
+      single_width <- max(6, length(desired_order) * 0.4 + 2)
+      combined_width <- single_width * length(plot_list)
+      
+      # Determine max gene count for height calculation
+      sample_genes <- if (!is.null(genes_to_plot)) length(genes_to_plot) else 20
+      combined_height <- max(6, sample_genes * 0.15 + (if (legend_position == "bottom") 2.5 else 1.5))
+      
+      out_combined_svg <- paste0(output_prefix, "combined_marker_dotplots.svg")
+      out_combined_png <- paste0(output_prefix, "combined_marker_dotplots.png")
+      
+      ggsave(out_combined_svg, plot = combined_plot, width = combined_width, height = combined_height, units = "in")
+      ggsave(out_combined_png, plot = combined_plot, width = combined_width, height = combined_height, units = "in", dpi = 300)
+      
+      print(paste("Saved Combined DotPlot to", out_combined_svg, "and", out_combined_png))
+    } else {
+      warning("Package 'patchwork' is required for combine_plots = TRUE")
+    }
   }
   
   return(plot_list)
@@ -141,11 +211,15 @@ plot_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/
 #' @param output_prefix Path prefix for saving output plots
 #' @param cell_type_column The column in meta.data containing cell types
 #' @param cache_paths Optional named list mapping run names to base paths to load 'run_without_noise.rds'
+#' @param legend_position Position of the legend ("bottom", "right", "none", etc.)
+#' @param combine_plots Logical, whether to generate a combined side-by-side figure when multiple datasets are provided
 #'
 #' @return A list of ggplot DotPlot objects
 plot_hardcoded_marker_dotplots <- function(run_results_list, output_prefix = "six2gfp/new/dotplots_hardcoded/", 
                                            cell_type_column = "predicted.type",
-                                           cache_paths = NULL) {
+                                           cache_paths = NULL,
+                                           legend_position = "bottom",
+                                           combine_plots = TRUE) {
   
   hardcoded_genes <- c(
     "KDR", "SOX17", "COL1A2", "COL1A1", "PDGFRB", "DCN", "FOXD1", 
@@ -165,5 +239,8 @@ plot_hardcoded_marker_dotplots <- function(run_results_list, output_prefix = "si
   plot_marker_dotplots(run_results_list, output_prefix, 
                        cell_type_column = cell_type_column,
                        genes_to_plot = genes_to_plot,
-                       cache_paths = cache_paths)
+                       cache_paths = cache_paths,
+                       legend_position = legend_position,
+                       combine_plots = combine_plots)
 }
+

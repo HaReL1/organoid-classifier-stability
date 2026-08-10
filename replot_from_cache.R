@@ -275,7 +275,7 @@ if (length(.diag_list) > 0) {
     # .dotplot_cache_paths <- c(list("Original Six2GFP" = NULL))
     
     # Add to beginning of .diag_list
-    .diag_list <- c(list("Original Six2GFP" = list(test = six2gfp_merged)), .diag_list)
+    .diag_list <- c(list("Original Six2GFP" = list(test = six_env$six2gfp_seurat)), .diag_list)
     .dotplot_cache_paths <- c(list("Original Six2GFP" = NULL), .dotplot_cache_paths)
   }
   
